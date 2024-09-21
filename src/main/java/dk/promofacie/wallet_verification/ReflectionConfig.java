@@ -6,6 +6,6 @@ import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.ScheduledEvent;
 import net.dv8tion.jda.api.managers.AudioManager;
 
-@RegisterForReflection(targets = {Guild[].class, AudioManager[].class, Role[].class, ScheduledEvent[].class})
+@RegisterForReflection(targets = {Guild[].class, AudioManager[].class)
 public class ReflectionConfig {
 }
