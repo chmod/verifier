@@ -1,6 +1,7 @@
 package dk.promofacie.wallet_verification;
 
 import io.smallrye.common.annotation.Blocking;
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
@@ -27,16 +28,16 @@ public class DiscordApiDI {
 
     @ConfigProperty(name = "discord_api_key")
     String apiKey;
+    private JDA jda;
 
-    @Produces
-    @Singleton
-    public CompletionStage<JDA> discordAPI() {
-        return executor.supplyAsync(() -> {
+    @PostConstruct
+    void init() {
+        executor.runAsync(() -> {
             try {
                 SlashCommandData verifyCommand = Commands.slash("verify", "Verify your address")
                         .addOption(OptionType.STRING, "address", "Your address", true);
 
-                JDA jda = JDABuilder.create(apiKey, GatewayIntent.GUILD_MEMBERS)
+                jda = JDABuilder.create(apiKey, GatewayIntent.GUILD_MEMBERS)
                         .setChunkingFilter(ChunkingFilter.ALL)
                         .setEventPassthrough(true)
                         .setMemberCachePolicy(MemberCachePolicy.ALL)
@@ -44,11 +45,16 @@ public class DiscordApiDI {
                         .build()
                         .awaitReady();
                 jda.updateCommands().addCommands(verifyCommand).queue();
-                return jda;
             } catch (InterruptedException e) {
                 throw new RuntimeException(e.getMessage());
             }
         });
+    }
+
+    @Produces
+    @Singleton
+    public JDA discordAPI() {
+        return jda;
     }
 
 }
