@@ -3,7 +3,7 @@ name: Build Quarkus Native Image and Push to Docker Hub
 on:
   push:
     branches:
-      - main
+      - master
   workflow_dispatch: # Allows manual trigger of the workflow
 
 jobs:
