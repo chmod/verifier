@@ -51,10 +51,10 @@ public class RoleService {
     public RoleService(JDA discordAPI,
                        PgPool pgPool) {
         this.danGuild = discordAPI.getGuildById(guildDANid);
-        holder = danGuild.getRoleById(1272505350226182164L);
-        whale = danGuild.getRoleById(1272320124136849518L);
-        fomo = danGuild.getRoleById(1272589052645871719L);
-        hit = danGuild.getRoleById(1272589057964376064L);
+        holder = danGuild.getRoleById(1288145176828575775L);
+        whale = danGuild.getRoleById(1288145181748625521L);
+        fomo = danGuild.getRoleById(1288145171988353044L);
+        hit = danGuild.getRoleById(1288145167102251029L);
         allRoles = List.of(holder, whale, fomo, hit);
         this.pgPool = pgPool;
     }
