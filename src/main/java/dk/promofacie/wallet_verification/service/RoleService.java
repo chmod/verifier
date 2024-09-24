@@ -72,7 +72,7 @@ public class RoleService {
                     return wallet;
                 })
                 .select().when(wallet -> {
-                    return Uni.createFrom().item(danGuild.getMemberById(wallet.getDiscordId())).onItem().transform(member -> true)
+                    return Uni.createFrom().item(danGuild.getMemberById(wallet.getDiscordId())).onItem().transform(Objects::nonNull)
                             .onFailure().recoverWithItem(false);
                 })
                 .onItem()
