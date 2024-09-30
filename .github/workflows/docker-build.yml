@@ -41,4 +41,4 @@ jobs:
       # Build and Push Docker Image
       - name: Build and push Docker image
         run: |
-          docker buildx build --platform linux/amd64 -f src/main/docker/Dockerfile.jvm -t r0ufif0u/metaflux:promofacie-verifier . --push
+          docker buildx build --platform linux/amd64 -f src/main/docker/Dockerfile.jvm -t r0ufif0u/metaflux:promofacie-verifier-dan . --push
