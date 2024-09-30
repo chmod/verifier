@@ -27,7 +27,8 @@ public record GetTransactionsStreamResponse(
             int stateVersion,
             String payloadHash,
             Message message,
-            Receipt receipt
+            Receipt receipt,
+            List<String> affectedGlobalEntities
     ) {
     }
 

@@ -4,6 +4,7 @@ import dk.promofacie.wallet_verification.radix.model.AddressStateDetails;
 import dk.promofacie.wallet_verification.radix.model.GetAddressDetails;
 import dk.promofacie.wallet_verification.radix.model.GetTransactionsStreamRequest;
 import dk.promofacie.wallet_verification.radix.model.GetTransactionsStreamResponse;
+import dk.promofacie.wallet_verification.service.FooResource;
 import io.smallrye.mutiny.Uni;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -17,6 +18,11 @@ public interface RadixClient {
     @Path("/stream/transactions")
     @Produces(MediaType.APPLICATION_JSON)
     Uni<GetTransactionsStreamResponse> getTransactions(GetTransactionsStreamRequest request);
+
+    @POST
+    @Path("/stream/transactions")
+    @Produces(MediaType.APPLICATION_JSON)
+    Uni<GetTransactionsStreamResponse> getTransactionsForAddress(FooResource.GetTransactionsStreamRequestNoLimit request);
 
     @POST
     @Path("/state/entity/details")
