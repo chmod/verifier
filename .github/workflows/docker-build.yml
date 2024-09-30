@@ -36,9 +36,9 @@ jobs:
       # Build Quarkus Native Image
       - name: Build Quarkus Native Image
         run: |
-          mvn clean package -DskipTests
+          mvn clean install package -DskipTests
 
       # Build and Push Docker Image
       - name: Build and push Docker image
         run: |
-          docker buildx build --platform linux/amd64 -f src/main/docker/Dockerfile.jvm -t r0ufif0u/metaflux:promofacie-verifier-dan . --push
+          docker buildx build --platform linux/amd64 -f src/main/docker/Dockerfile.jvm -t r0ufif0u/metaflux:promofacie-verifier . --push
