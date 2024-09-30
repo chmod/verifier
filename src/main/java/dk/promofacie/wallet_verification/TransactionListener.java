@@ -49,7 +49,7 @@ public class TransactionListener {
 
         Multi.createFrom().ticks().every(Duration.of(5, ChronoUnit.MINUTES))
                 .onItem()
-                .invoke(tick -> log.debug("Checking for new transactions")).onItem()
+                .invoke(tick -> log.debug("Checking for new transactions on tick {}", tick)).onItem()
                 .transformToMulti(tick -> transactionExistsCheck)
                 .merge()
                 .onItem()
