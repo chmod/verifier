@@ -1,4 +1,4 @@
-name: Build Quarkus Native Image and Push to Docker Hub
+name: Build Quarkus Image and Push to Docker Hub
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       # Build Quarkus Native Image
-      - name: Build Quarkus Native Image
+      - name: Build Quarkus Image
         run: |
           mvn clean install package -DskipTests
 

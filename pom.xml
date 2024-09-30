@@ -110,7 +110,6 @@
               <goal>build</goal>
               <goal>generate-code</goal>
               <goal>generate-code-tests</goal>
-              <goal>native-image-agent</goal>
             </goals>
           </execution>
         </executions>
