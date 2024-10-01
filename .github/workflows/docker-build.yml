@@ -20,7 +20,7 @@ jobs:
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin' # Alternatively, you can use 'graalvm' if you want GraalVM JDK for Java 17
-          java-version: '17'
+          java-version: '21'
 
       # Set up Docker Buildx (required for multi-platform builds)
       - name: Set up Docker Buildx
@@ -41,4 +41,4 @@ jobs:
       # Build and Push Docker Image
       - name: Build and push Docker image
         run: |
-          docker buildx build --push --platform linux/amd64 -f src/main/docker/Dockerfile.jvm -t r0ufif0u/metaflux:promofacie-verifier-r0 .
+          docker buildx build --push --platform linux/amd64 -f src/main/docker/Dockerfile.jvm -t r0ufif0u/metaflux:promofacie-verifier .

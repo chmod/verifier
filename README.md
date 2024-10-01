@@ -1,4 +1,4 @@
-# danbot
+# wallet-verification
 
 This project uses Quarkus, the Supersonic Subatomic Java Framework.
 
@@ -49,11 +49,25 @@ Or, if you don't have GraalVM installed, you can run the native executable build
 ./mvnw package -Dnative -Dquarkus.native.container-build=true
 ```
 
-You can then execute your native executable with: `./target/danbot-1.0-runner`
+You can then execute your native executable with: `./target/wallet-verification-1.0.0-SNAPSHOT-runner`
 
 If you want to learn more about building native executables, please consult <https://quarkus.io/guides/maven-tooling>.
 
+## Related Guides
+
+- Messaging - Kafka Connector ([guide](https://quarkus.io/guides/kafka-getting-started)): Connect to Kafka with Reactive Messaging
+- Redis Client ([guide](https://quarkus.io/guides/redis)): Connect to Redis in either imperative or reactive style
+- Vault ([guide](https://quarkiverse.github.io/quarkiverse-docs/quarkus-vault/dev/index.html)): Store your credentials securely in HashiCorp Vault
+- SmallRye Context Propagation ([guide](https://quarkus.io/guides/context-propagation)): Propagate contexts between managed threads in reactive applications
+
 ## Provided Code
+
+### Messaging codestart
+
+Use Quarkus Messaging
+
+[Related Apache Kafka guide section...](https://quarkus.io/guides/kafka-reactive-getting-started)
+
 
 ### REST
 
