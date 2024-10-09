@@ -42,34 +42,24 @@ public class RoleService {
     private final Role fomo;
     private final Role hit;
     private final List<Role> allRoles;
-    private final PgPool pgPool;
     private final BigDecimal holderBigInt = BigDecimal.valueOf(1_500_000L);
     private final BigDecimal whaleBigInt = BigDecimal.valueOf(1_000_000_000L);
 
     @Inject
-    public RoleService(JDA discordAPI,
-                       PgPool pgPool) {
+    public RoleService(JDA discordAPI) {
         this.danGuild = discordAPI.getGuildById(guildDANid);
         holder = danGuild.getRoleById(1288145176828575775L);
         whale = danGuild.getRoleById(1288145181748625521L);
         fomo = danGuild.getRoleById(1288145171988353044L);
         hit = danGuild.getRoleById(1288145167102251029L);
         allRoles = List.of(holder, whale, fomo, hit);
-        this.pgPool = pgPool;
     }
 
 
     @WithTransaction
     public Uni<Void> applyRoles() {
-        return pgPool.withTransaction(conn -> conn.query("SELECT * FROM wallet")
-                .execute()
-                .onItem()
-                .transformToMulti(rowset -> Multi.createFrom().iterable(rowset)).map(row -> {
-                    Wallet wallet = new Wallet();
-                    wallet.setAddress(row.getString("address"));
-                    wallet.setDiscordId(row.getString("discordid"));
-                    return wallet;
-                })
+        return Wallet.<Wallet>listAll().onItem()
+                .transformToMulti(list -> Multi.createFrom().iterable(list))
                 .select().when(wallet -> {
                     return Uni.createFrom().item(danGuild.getMemberById(wallet.getDiscordId())).onItem().transform(Objects::nonNull)
                             .onFailure().recoverWithItem(false);
@@ -168,7 +158,7 @@ public class RoleService {
                     addOperation.addAll(removeOperation);
                     return Uni.combine().all().unis(addOperation)
                             .usingConcurrencyOf(1).discardItems();
-                }));
+                });
     }
 
 
