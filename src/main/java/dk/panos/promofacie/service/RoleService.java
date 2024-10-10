@@ -4,6 +4,7 @@ import dk.panos.promofacie.db.Wallet;
 import dk.panos.promofacie.radix.RadixClient;
 import dk.panos.promofacie.radix.model.AddressStateDetails;
 import dk.panos.promofacie.radix.model.GetAddressDetails;
+import io.quarkus.hibernate.reactive.panache.common.WithSession;
 import io.quarkus.hibernate.reactive.panache.common.WithTransaction;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
@@ -60,7 +61,7 @@ public class RoleService {
     }
 
 
-    @WithTransaction
+    @WithSession
     public Uni<Void> applyRoles() {
         return Wallet.<Wallet>listAll().onItem()
                 .transformToMulti(list -> Multi.createFrom().iterable(list))
