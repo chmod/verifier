@@ -2,6 +2,7 @@ package dk.panos.promofacie.task;
 
 import dk.panos.promofacie.service.RoleService;
 import io.quarkus.arc.profile.IfBuildProfile;
+import io.quarkus.hibernate.reactive.panache.common.WithSession;
 import io.quarkus.hibernate.reactive.panache.common.WithTransaction;
 import io.quarkus.scheduler.Scheduled;
 import io.smallrye.mutiny.Uni;
@@ -18,8 +19,8 @@ public class Scheduler {
     @Inject
     RoleService roleService;
 
-    @Scheduled(every = "5m")
-    @WithTransaction
+    @Scheduled(every = "10m")
+    @WithSession
     Uni<Void> cronJobWithExpressionInConfig() {
         log.debug("Scheduling with cron job");
         return roleService.applyRoles().onItem()
