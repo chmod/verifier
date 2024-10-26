@@ -18,11 +18,16 @@ public record AddressStateDetails(
     // Define the Item record
     public record Item(
             String address,
-            FungibleResources fungibleResources
+            FungibleResources fungibleResources,
+            NonFungibleResources nonFungibleResources
     ) {}
 
     // Define the FungibleResources record
     public record FungibleResources(
+            List<ResourceItem> items
+    ) {}
+
+    public record NonFungibleResources(
             List<ResourceItem> items
     ) {}
 

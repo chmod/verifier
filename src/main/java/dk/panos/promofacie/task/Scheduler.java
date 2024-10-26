@@ -2,8 +2,6 @@ package dk.panos.promofacie.task;
 
 import dk.panos.promofacie.service.RoleService;
 import io.quarkus.arc.profile.IfBuildProfile;
-import io.quarkus.hibernate.reactive.panache.common.WithSession;
-import io.quarkus.hibernate.reactive.panache.common.WithTransaction;
 import io.quarkus.scheduler.Scheduled;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -12,7 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @ApplicationScoped
-//@IfBuildProfile("prod")
+@IfBuildProfile("prod")
 public class Scheduler {
     private static final Logger log = LoggerFactory.getLogger(Scheduler.class);
 

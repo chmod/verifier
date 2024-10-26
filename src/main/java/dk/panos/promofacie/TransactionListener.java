@@ -21,7 +21,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.function.Function;
 
 @ApplicationScoped
-@IfBuildProfile("prod")
+//@IfBuildProfile("prod")
 public class TransactionListener {
     private static Logger log = LoggerFactory.getLogger(TransactionListener.class);
     @Inject

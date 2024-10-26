@@ -46,6 +46,7 @@ public class RoleService {
     private final Role whale;
     private final Role fomo;
     private final Role hit;
+    private final Role ogNFT;
     private final List<Role> allRoles;
     private final BigDecimal holderBigInt = BigDecimal.valueOf(1_500_000L);
     private final BigDecimal whaleBigInt = BigDecimal.valueOf(1_000_000_000L);
@@ -57,7 +58,8 @@ public class RoleService {
         whale = danGuild.getRoleById(1288145181748625521L);
         fomo = danGuild.getRoleById(1288145171988353044L);
         hit = danGuild.getRoleById(1288145167102251029L);
-        allRoles = List.of(holder, whale, fomo, hit);
+        ogNFT = danGuild.getRoleById(1299154758413844521L);
+        allRoles = List.of(holder, whale, fomo, hit, ogNFT);
     }
 
 
@@ -104,6 +106,13 @@ public class RoleService {
                             vaultHoldingFOMOopt.ifPresent(any -> rolesShouldHave.add(fomo));
                             vaultHoldingHITopt.ifPresent(any -> rolesShouldHave.add(hit));
 
+                            Optional<AddressStateDetails.ResourceItem> vaultOGHolding = detail.items().stream()
+                                    .flatMap(item -> item.nonFungibleResources().items().stream())
+                                    .filter(resourceItem -> resourceItem.resourceAddress().equals("resource_rdx1ng3vtr9f06vvzp2zjmg7pujtkkrcgrh72sls5d9jep0he9f0r7qrqh"))
+                                    .findFirst();
+                            vaultOGHolding.ifPresent(any -> rolesShouldHave.add(ogNFT));
+
+
                             List<Role> rolesShouldntHave = allRoles.stream().filter(role -> !rolesShouldHave.contains(role)).toList();
                             Member member = danGuild.getMemberById(wallet.getDiscordId());
                             List<Role> alreadyHas = member.getRoles().stream()
@@ -143,7 +152,6 @@ public class RoleService {
                                         .onItem()
                                         .invoke(RestAction::queue)
                                         .runSubscriptionOn(Infrastructure.getDefaultWorkerPool()) // Switch to a worker thread
-                                        .emitOn(MutinyHelper.executor(context))
                                         .onItem()
                                         .delayIt().by(Duration.of(500, ChronoUnit.MILLIS))
                                         .onItem()
@@ -158,7 +166,6 @@ public class RoleService {
                                         .onItem()
                                         .invoke(RestAction::queue)
                                         .runSubscriptionOn(Infrastructure.getDefaultWorkerPool()) // Switch to a worker thread
-                                        .emitOn(MutinyHelper.executor(context))
                                         .onItem()
                                         .delayIt().by(Duration.of(500, ChronoUnit.MILLIS))
                                         .onItem()
@@ -168,7 +175,7 @@ public class RoleService {
 
                     addOperation.addAll(removeOperation);
                     return Uni.combine().all().unis(addOperation)
-                            .usingConcurrencyOf(1).discardItems();
+                            .usingConcurrencyOf(1).discardItems().emitOn(MutinyHelper.executor(context));
                 });
     }
 
