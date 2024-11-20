@@ -5,7 +5,6 @@ import dk.panos.promofacie.radix.RadixClient;
 import dk.panos.promofacie.radix.model.AddressStateDetails;
 import dk.panos.promofacie.radix.model.GetAddressDetails;
 import io.quarkus.hibernate.reactive.panache.common.WithSession;
-import io.quarkus.hibernate.reactive.panache.common.WithTransaction;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
@@ -14,7 +13,6 @@ import io.smallrye.mutiny.tuples.Tuple3;
 import io.smallrye.mutiny.vertx.MutinyHelper;
 import io.vertx.core.Context;
 import io.vertx.core.Vertx;
-import io.vertx.mutiny.pgclient.PgPool;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import net.dv8tion.jda.api.JDA;
@@ -47,6 +45,7 @@ public class RoleService {
     private final Role fomo;
     private final Role hit;
     private final Role ogNFT;
+    private final Role staker;
     private final List<Role> allRoles;
     private final BigDecimal holderBigInt = BigDecimal.valueOf(1_500_000L);
     private final BigDecimal whaleBigInt = BigDecimal.valueOf(1_000_000_000L);
@@ -59,7 +58,8 @@ public class RoleService {
         fomo = danGuild.getRoleById(1288145171988353044L);
         hit = danGuild.getRoleById(1288145167102251029L);
         ogNFT = danGuild.getRoleById(1299154758413844521L);
-        allRoles = List.of(holder, whale, fomo, hit, ogNFT);
+        staker = danGuild.getRoleById(1308788007704203264L);
+        allRoles = List.of(holder, whale, fomo, hit, ogNFT, staker);
     }
 
 
@@ -80,7 +80,7 @@ public class RoleService {
                                     .filter(resourceItem -> resourceItem.explicitMetadata().items().stream()
                                             .anyMatch(metadataItem -> metadataItem.value().typed().value().equals("DAN")))
                                     .findFirst();
-                            List<Role> rolesShouldHave = new ArrayList<>();
+                            Set<Role> rolesShouldHave = new HashSet<>();
                             if (vaultHoldingDANOpt.isPresent()) {
                                 BigDecimal danSum = vaultHoldingDANOpt.get().vaults().items().stream().map(vault -> new BigDecimal(vault.amount()))
                                         .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -111,6 +111,15 @@ public class RoleService {
                                     .filter(resourceItem -> resourceItem.resourceAddress().equals("resource_rdx1ng3vtr9f06vvzp2zjmg7pujtkkrcgrh72sls5d9jep0he9f0r7qrqh"))
                                     .findFirst();
                             vaultOGHolding.ifPresent(any -> rolesShouldHave.add(ogNFT));
+
+                            Optional<AddressStateDetails.ResourceItem> vaultStakerOpt = detail.items().stream()
+                                    .flatMap(item -> item.nonFungibleResources().items().stream())
+                                    .filter(resourceItem -> resourceItem.resourceAddress().equals("resource_rdx1n2jvd76sc44p2ef6nwuakh6wzlnfuzfn3zk278qrksuz442vatn2dm"))
+                                    .findFirst();
+                            vaultStakerOpt.ifPresent(any -> {
+                                rolesShouldHave.add(staker);
+                                rolesShouldHave.add(holder);
+                            });
 
 
                             List<Role> rolesShouldntHave = allRoles.stream().filter(role -> !rolesShouldHave.contains(role)).toList();
