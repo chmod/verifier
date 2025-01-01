@@ -24,6 +24,7 @@ import net.dv8tion.jda.api.requests.restaction.AuditableRestAction;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.jboss.logging.Logger;
 import org.jetbrains.annotations.NotNull;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -36,6 +37,7 @@ import java.util.stream.Collectors;
 public class RoleService {
 
     private static final Logger logger = Logger.getLogger(RoleService.class);
+    private static final org.slf4j.Logger log = LoggerFactory.getLogger(RoleService.class);
     private final long guildDANid = 1236323618338766938L;
     private final Guild danGuild;
     @RestClient
@@ -68,8 +70,16 @@ public class RoleService {
         return Wallet.<Wallet>listAll().onItem()
                 .transformToMulti(list -> Multi.createFrom().iterable(list))
                 .select().when(wallet -> {
-                    return Uni.createFrom().item(danGuild.getMemberById(wallet.getDiscordId())).onItem().transform(Objects::nonNull)
-                            .onFailure().recoverWithItem(false);
+                    return Uni.createFrom()
+                            .item(() -> {
+                                log.info("Get by id {}", wallet.getDiscordId());
+                                return danGuild.getMemberById(wallet.getDiscordId());
+                            })
+                            .runSubscriptionOn(Infrastructure.getDefaultWorkerPool())  // Ensure this runs on the worker pool
+                            .onItem().transform(Objects::nonNull)  // Transform the result
+                            .onFailure().recoverWithItem(false);  // Handle failure
+
+
                 })
                 .onItem()
                 .transformToUni(wallet -> radixClient.getAddressStateDetails(new GetAddressDetails(List.of(wallet.getAddress())))
@@ -158,9 +168,9 @@ public class RoleService {
                                 return entry.getValue().stream().map(member -> Uni
                                         .createFrom()
                                         .item(addRoles(entry.getKey(), member).get())
+                                        .runSubscriptionOn(Infrastructure.getDefaultWorkerPool()) // Switch to a worker thread
                                         .onItem()
                                         .invoke(RestAction::queue)
-                                        .runSubscriptionOn(Infrastructure.getDefaultWorkerPool()) // Switch to a worker thread
                                         .onItem()
                                         .delayIt().by(Duration.of(500, ChronoUnit.MILLIS))
                                         .onItem()
@@ -172,9 +182,9 @@ public class RoleService {
                                 return entry.getValue().stream().map(member -> Uni
                                         .createFrom()
                                         .item(removeRoles(entry.getKey(), member).get())
+                                        .runSubscriptionOn(Infrastructure.getDefaultWorkerPool()) // Switch to a worker thread
                                         .onItem()
                                         .invoke(RestAction::queue)
-                                        .runSubscriptionOn(Infrastructure.getDefaultWorkerPool()) // Switch to a worker thread
                                         .onItem()
                                         .delayIt().by(Duration.of(500, ChronoUnit.MILLIS))
                                         .onItem()
