@@ -82,64 +82,67 @@ public class RoleService {
 
                 })
                 .onItem()
-                .transformToUni(wallet -> radixClient.getAddressStateDetails(new GetAddressDetails(List.of(wallet.getAddress())))
-                        .onItem()
-                        .transform(detail -> {
-                            Optional<AddressStateDetails.ResourceItem> vaultHoldingDANOpt = detail.items().stream()
-                                    .flatMap(item -> item.fungibleResources().items().stream())
-                                    .filter(resourceItem -> resourceItem.explicitMetadata().items().stream()
-                                            .anyMatch(metadataItem -> metadataItem.value().typed().value().equals("DAN")))
-                                    .findFirst();
-                            Set<Role> rolesShouldHave = new HashSet<>();
-                            if (vaultHoldingDANOpt.isPresent()) {
-                                BigDecimal danSum = vaultHoldingDANOpt.get().vaults().items().stream().map(vault -> new BigDecimal(vault.amount()))
-                                        .reduce(BigDecimal.ZERO, BigDecimal::add);
-                                if (danSum.compareTo(holderBigInt) >= 0) {
-                                    rolesShouldHave.add(holder);
-                                    if (danSum.compareTo(whaleBigInt) >= 0) {
-                                        rolesShouldHave.add(whale);
-                                    }
-                                }
-                            }
-                            Optional<AddressStateDetails.ResourceItem> vaultHoldingFOMOopt = detail.items().stream()
-                                    .flatMap(item -> item.fungibleResources().items().stream())
-                                    .filter(resourceItem -> resourceItem.explicitMetadata().items().stream()
-                                            .anyMatch(metadataItem -> metadataItem.value().typed().value().equals("FOMO")))
-                                    .findFirst();
+                .transformToUni(wallet -> {
+                            log.info("Calling get address for wallet {}", wallet);
+                            return radixClient.getAddressStateDetails(new GetAddressDetails(List.of(wallet.getAddress())))
+                                    .onItem()
+                                    .transform(detail -> {
+                                        Optional<AddressStateDetails.ResourceItem> vaultHoldingDANOpt = detail.items().stream()
+                                                .flatMap(item -> item.fungibleResources().items().stream())
+                                                .filter(resourceItem -> resourceItem.explicitMetadata().items().stream()
+                                                        .anyMatch(metadataItem -> metadataItem.value().typed().value().equals("DAN")))
+                                                .findFirst();
+                                        Set<Role> rolesShouldHave = new HashSet<>();
+                                        if (vaultHoldingDANOpt.isPresent()) {
+                                            BigDecimal danSum = vaultHoldingDANOpt.get().vaults().items().stream().map(vault -> new BigDecimal(vault.amount()))
+                                                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+                                            if (danSum.compareTo(holderBigInt) >= 0) {
+                                                rolesShouldHave.add(holder);
+                                                if (danSum.compareTo(whaleBigInt) >= 0) {
+                                                    rolesShouldHave.add(whale);
+                                                }
+                                            }
+                                        }
+                                        Optional<AddressStateDetails.ResourceItem> vaultHoldingFOMOopt = detail.items().stream()
+                                                .flatMap(item -> item.fungibleResources().items().stream())
+                                                .filter(resourceItem -> resourceItem.explicitMetadata().items().stream()
+                                                        .anyMatch(metadataItem -> metadataItem.value().typed().value().equals("FOMO")))
+                                                .findFirst();
 
-                            Optional<AddressStateDetails.ResourceItem> vaultHoldingHITopt = detail.items().stream()
-                                    .flatMap(item -> item.fungibleResources().items().stream())
-                                    .filter(resourceItem -> resourceItem.explicitMetadata().items().stream()
-                                            .anyMatch(metadataItem -> metadataItem.value().typed().value().equals("addix")))
-                                    .findFirst();
+                                        Optional<AddressStateDetails.ResourceItem> vaultHoldingHITopt = detail.items().stream()
+                                                .flatMap(item -> item.fungibleResources().items().stream())
+                                                .filter(resourceItem -> resourceItem.explicitMetadata().items().stream()
+                                                        .anyMatch(metadataItem -> metadataItem.value().typed().value().equals("addix")))
+                                                .findFirst();
 
-                            vaultHoldingFOMOopt.ifPresent(any -> rolesShouldHave.add(fomo));
-                            vaultHoldingHITopt.ifPresent(any -> rolesShouldHave.add(hit));
+                                        vaultHoldingFOMOopt.ifPresent(any -> rolesShouldHave.add(fomo));
+                                        vaultHoldingHITopt.ifPresent(any -> rolesShouldHave.add(hit));
 
-                            Optional<AddressStateDetails.ResourceItem> vaultOGHolding = detail.items().stream()
-                                    .flatMap(item -> item.nonFungibleResources().items().stream())
-                                    .filter(resourceItem -> resourceItem.resourceAddress().equals("resource_rdx1ng3vtr9f06vvzp2zjmg7pujtkkrcgrh72sls5d9jep0he9f0r7qrqh"))
-                                    .findFirst();
-                            vaultOGHolding.ifPresent(any -> rolesShouldHave.add(ogNFT));
+                                        Optional<AddressStateDetails.ResourceItem> vaultOGHolding = detail.items().stream()
+                                                .flatMap(item -> item.nonFungibleResources().items().stream())
+                                                .filter(resourceItem -> resourceItem.resourceAddress().equals("resource_rdx1ng3vtr9f06vvzp2zjmg7pujtkkrcgrh72sls5d9jep0he9f0r7qrqh"))
+                                                .findFirst();
+                                        vaultOGHolding.ifPresent(any -> rolesShouldHave.add(ogNFT));
 
-                            Optional<AddressStateDetails.ResourceItem> vaultStakerOpt = detail.items().stream()
-                                    .flatMap(item -> item.nonFungibleResources().items().stream())
-                                    .filter(resourceItem -> resourceItem.resourceAddress().equals("resource_rdx1n2jvd76sc44p2ef6nwuakh6wzlnfuzfn3zk278qrksuz442vatn2dm"))
-                                    .findFirst();
-                            vaultStakerOpt.ifPresent(any -> {
-                                rolesShouldHave.add(staker);
-                                rolesShouldHave.add(holder);
-                            });
+                                        Optional<AddressStateDetails.ResourceItem> vaultStakerOpt = detail.items().stream()
+                                                .flatMap(item -> item.nonFungibleResources().items().stream())
+                                                .filter(resourceItem -> resourceItem.resourceAddress().equals("resource_rdx1n2jvd76sc44p2ef6nwuakh6wzlnfuzfn3zk278qrksuz442vatn2dm"))
+                                                .findFirst();
+                                        vaultStakerOpt.ifPresent(any -> {
+                                            rolesShouldHave.add(staker);
+                                            rolesShouldHave.add(holder);
+                                        });
 
 
-                            List<Role> rolesShouldntHave = allRoles.stream().filter(role -> !rolesShouldHave.contains(role)).toList();
-                            Member member = danGuild.getMemberById(wallet.getDiscordId());
-                            List<Role> alreadyHas = member.getRoles().stream()
-                                    .filter(allRoles::contains).toList();
-                            return Tuple3.of(member, rolesShouldHave.stream()
-                                    .filter(role -> !alreadyHas.contains(role)).toList(), rolesShouldntHave.stream().filter(alreadyHas::contains).toList());
+                                        List<Role> rolesShouldntHave = allRoles.stream().filter(role -> !rolesShouldHave.contains(role)).toList();
+                                        Member member = danGuild.getMemberById(wallet.getDiscordId());
+                                        List<Role> alreadyHas = member.getRoles().stream()
+                                                .filter(allRoles::contains).toList();
+                                        return Tuple3.of(member, rolesShouldHave.stream()
+                                                .filter(role -> !alreadyHas.contains(role)).toList(), rolesShouldntHave.stream().filter(alreadyHas::contains).toList());
 
-                        })
+                                    });
+                        }
                 ).concatenate().collect().asList().onItem().transform(list -> {
                     Map<Role, List<Member>> shouldHaveMapping = list.stream()
                             .flatMap(tuple -> tuple.getItem2().stream().map(l -> new AbstractMap.SimpleEntry<>(l, tuple.getItem1())))
