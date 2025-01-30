@@ -67,6 +67,7 @@ public class RoleService {
 
     @WithSession
     public Uni<Void> applyRoles() {
+        Context context = Vertx.currentContext();
         return Wallet.<Wallet>listAll().onItem()
                 .transformToMulti(list -> Multi.createFrom().iterable(list))
                 .select().when(wallet -> {
@@ -165,7 +166,7 @@ public class RoleService {
                     }
                     Map<Role, List<Member>> additions = tuple2.getItem1();
                     Map<Role, List<Member>> removals = tuple2.getItem2();
-                    Context context = Vertx.currentContext();
+
                     Set<Uni<Member>> addOperation = additions.entrySet().stream()
                             .flatMap(entry -> {
                                 return entry.getValue().stream().map(member -> Uni
