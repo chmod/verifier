@@ -19,9 +19,9 @@ public class Scheduler {
 
     @Scheduled(every = "5m")
     Uni<Void> cronJobWithExpressionInConfig() {
-        log.debug("Scheduling with cron job");
+        log.info("Scheduling with cron job");
         return roleService.applyRoles().onItem()
-                .invoke(any -> log.debug("Finished. Next in 5m")).onFailure()
+                .invoke(any -> log.info("Finished. Next in 5m")).onFailure()
                 .invoke(err -> {
                     log.error("Error during assignment", err);
                 })
