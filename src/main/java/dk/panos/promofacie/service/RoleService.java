@@ -198,8 +198,8 @@ public class RoleService {
 
                     addOperation.addAll(removeOperation);
                     return Uni.combine().all().unis(addOperation)
-                            .usingConcurrencyOf(1).discardItems().emitOn(MutinyHelper.executor(context));
-                });
+                            .usingConcurrencyOf(1).discardItems();
+                }).emitOn(MutinyHelper.executor(context));
     }
 
 
