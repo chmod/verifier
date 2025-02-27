@@ -73,7 +73,6 @@ public class RoleService {
                 .select().when(wallet -> {
                     return Uni.createFrom()
                             .item(() -> {
-                                log.info("Get by id {}", wallet.getDiscordId());
                                 return danGuild.getMemberById(wallet.getDiscordId());
                             })
                             .runSubscriptionOn(Infrastructure.getDefaultWorkerPool())  // Ensure this runs on the worker pool
@@ -84,7 +83,6 @@ public class RoleService {
                 })
                 .onItem()
                 .transformToUni(wallet -> {
-                            log.info("Calling get address for wallet {}", wallet);
                             return radixClient.getAddressStateDetails(new GetAddressDetails(List.of(wallet.getAddress())))
                                     .onItem()
                                     .transform(detail -> {
