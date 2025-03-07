@@ -17,7 +17,7 @@ public class Scheduler {
     @Inject
     RoleService roleService;
 
-    @Scheduled(every = "5m")
+    @Scheduled(every = "15m")
     Uni<Void> cronJobWithExpressionInConfig() {
         log.info("Scheduling with cron job");
         return roleService.applyRoles().onItem()
