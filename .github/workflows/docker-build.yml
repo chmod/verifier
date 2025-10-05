@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runsOn: ubuntu-latest
 
     steps:
       # Checkout the repository
@@ -20,7 +20,7 @@ jobs:
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin' # Alternatively, you can use 'graalvm' if you want GraalVM JDK for Java 17
-          java-version: '21'
+          javaVersion: '21'
 
       # Set up Docker Buildx (required for multi-platform builds)
       - name: Set up Docker Buildx

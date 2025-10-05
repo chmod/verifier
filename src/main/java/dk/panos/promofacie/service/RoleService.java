@@ -3,221 +3,169 @@ package dk.panos.promofacie.service;
 import dk.panos.promofacie.db.Wallet;
 import dk.panos.promofacie.radix.RadixClient;
 import dk.panos.promofacie.radix.model.AddressStateDetails;
-import dk.panos.promofacie.radix.model.GetAddressDetails;
-import io.quarkus.hibernate.reactive.panache.common.WithSession;
-import io.smallrye.mutiny.Multi;
-import io.smallrye.mutiny.Uni;
-import io.smallrye.mutiny.infrastructure.Infrastructure;
-import io.smallrye.mutiny.tuples.Tuple2;
-import io.smallrye.mutiny.tuples.Tuple3;
-import io.smallrye.mutiny.vertx.MutinyHelper;
-import io.vertx.core.Context;
-import io.vertx.core.Vertx;
+import dk.panos.promofacie.radix.model.GetNonFungibleVaultsRequest;
+import dk.panos.promofacie.radix.model.GetNonFungibleVaultsResponse;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Role;
-import net.dv8tion.jda.api.requests.RestAction;
 import net.dv8tion.jda.api.requests.restaction.AuditableRestAction;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
-import org.jboss.logging.Logger;
-import org.jetbrains.annotations.NotNull;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
-import java.time.Duration;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.function.Supplier;
-import java.util.stream.Collectors;
+import java.util.concurrent.*;
 
 @ApplicationScoped
 public class RoleService {
 
-    private static final Logger logger = Logger.getLogger(RoleService.class);
     private static final org.slf4j.Logger log = LoggerFactory.getLogger(RoleService.class);
-    private final long guildDANid = 1236323618338766938L;
-    private final Guild danGuild;
+    private final long guildId = 1403833198814953492L;
+    private final Guild guild;
     @RestClient
     RadixClient radixClient;
+
     private final Role holder;
     private final Role whale;
-    private final Role fomo;
-    private final Role hit;
-    private final Role ogNFT;
-    private final Role staker;
     private final List<Role> allRoles;
     private final BigDecimal holderBigInt = BigDecimal.valueOf(1_500_000L);
     private final BigDecimal whaleBigInt = BigDecimal.valueOf(1_000_000_000L);
 
     @Inject
     public RoleService(JDA discordAPI) {
-        this.danGuild = discordAPI.getGuildById(guildDANid);
-        holder = danGuild.getRoleById(1288145176828575775L);
-        whale = danGuild.getRoleById(1288145181748625521L);
-        fomo = danGuild.getRoleById(1288145171988353044L);
-        hit = danGuild.getRoleById(1288145167102251029L);
-        ogNFT = danGuild.getRoleById(1299154758413844521L);
-        staker = danGuild.getRoleById(1308788007704203264L);
-        allRoles = List.of(holder, whale, fomo, hit, ogNFT, staker);
+        this.guild = discordAPI.getGuildById(guildId);
+        holder = null;//guild.getRoleById(1424056936726532237L);
+        whale = null;//guild.getRoleById(1424057237273444543L);
+        allRoles = List.of();
     }
 
+    /**
+     * Apply roles to all members based on wallet state.
+     * Uses virtual threads and structured concurrency.
+     */
+    public void applyRoles() throws InterruptedException {
+        List<Wallet> wallets = Wallet.listAll();
 
-    @WithSession
-    public Uni<Void> applyRoles() {
-        Context context = Vertx.currentContext();
-        return Wallet.<Wallet>listAll().onItem()
-                .transformToMulti(list -> Multi.createFrom().iterable(list))
-                .select().when(wallet -> {
-                    return Uni.createFrom()
-                            .item(() -> {
-                                return danGuild.getMemberById(wallet.getDiscordId());
-                            })
-                            .runSubscriptionOn(Infrastructure.getDefaultWorkerPool())  // Ensure this runs on the worker pool
-                            .onItem().transform(Objects::nonNull)  // Transform the result
-                            .onFailure().recoverWithItem(false);  // Handle failure
+        // Thread-safe collections for concurrent updates
+        Map<Role, Queue<Member>> additions = new ConcurrentHashMap<>();
+        Map<Role, Queue<Member>> removals = new ConcurrentHashMap<>();
 
+        // Custom virtual thread factory for naming
+        ThreadFactory vthreadFactory = Thread.ofVirtual().name("role-worker-", 0).factory();
 
-                })
-                .onItem()
-                .transformToUni(wallet -> {
-                            return radixClient.getAddressStateDetails(new GetAddressDetails(List.of(wallet.getAddress())))
-                                    .onItem()
-                                    .transform(detail -> {
-                                        Optional<AddressStateDetails.ResourceItem> vaultHoldingDANOpt = detail.items().stream()
-                                                .flatMap(item -> item.fungibleResources().items().stream())
-                                                .filter(resourceItem -> resourceItem.explicitMetadata().items().stream()
-                                                        .anyMatch(metadataItem -> metadataItem.value().typed().value().equals("DAN")))
-                                                .findFirst();
-                                        Set<Role> rolesShouldHave = new HashSet<>();
-                                        if (vaultHoldingDANOpt.isPresent()) {
-                                            BigDecimal danSum = vaultHoldingDANOpt.get().vaults().items().stream().map(vault -> new BigDecimal(vault.amount()))
-                                                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-                                            if (danSum.compareTo(holderBigInt) >= 0) {
-                                                rolesShouldHave.add(holder);
-                                                if (danSum.compareTo(whaleBigInt) >= 0) {
-                                                    rolesShouldHave.add(whale);
-                                                }
-                                            }
-                                        }
-                                        Optional<AddressStateDetails.ResourceItem> vaultHoldingFOMOopt = detail.items().stream()
-                                                .flatMap(item -> item.fungibleResources().items().stream())
-                                                .filter(resourceItem -> resourceItem.explicitMetadata().items().stream()
-                                                        .anyMatch(metadataItem -> metadataItem.value().typed().value().equals("FOMO")))
-                                                .findFirst();
+        // Step 1: Compute role differences in parallel
+        try (var scope = new StructuredTaskScope.ShutdownOnFailure("RoleComputation", vthreadFactory)) {
+            for (Wallet wallet : wallets) {
+                scope.fork(() -> {
+                    processWallet(wallet, additions, removals);
+                    return null;
+                });
+            }
 
-                                        Optional<AddressStateDetails.ResourceItem> vaultHoldingHITopt = detail.items().stream()
-                                                .flatMap(item -> item.fungibleResources().items().stream())
-                                                .filter(resourceItem -> resourceItem.explicitMetadata().items().stream()
-                                                        .anyMatch(metadataItem -> metadataItem.value().typed().value().equals("addix")))
-                                                .findFirst();
+            scope.join();
+            try {
+                scope.throwIfFailed();
+            } catch (ExecutionException e) {
+                throw new RuntimeException("Failed processing wallets", e);
+            }
+        }
 
-                                        vaultHoldingFOMOopt.ifPresent(any -> rolesShouldHave.add(fomo));
-                                        vaultHoldingHITopt.ifPresent(any -> rolesShouldHave.add(hit));
+        log.info("Role computation finished. Submitting Discord updates...");
 
-                                        Optional<AddressStateDetails.ResourceItem> vaultOGHolding = detail.items().stream()
-                                                .flatMap(item -> item.nonFungibleResources().items().stream())
-                                                .filter(resourceItem -> resourceItem.resourceAddress().equals("resource_rdx1ng3vtr9f06vvzp2zjmg7pujtkkrcgrh72sls5d9jep0he9f0r7qrqh"))
-                                                .findFirst();
-                                        vaultOGHolding.ifPresent(any -> rolesShouldHave.add(ogNFT));
+        // Step 2: Submit role changes to Discord in parallel (fire-and-forget)
+        try (var scope = new StructuredTaskScope.ShutdownOnFailure("DiscordUpdates", vthreadFactory)) {
+            additions.forEach((role, members) ->
+                    members.forEach(member -> scope.fork(() -> {
+                        addRole(role, member).submit();
+                        return null;
+                    }))
+            );
 
-                                        Optional<AddressStateDetails.ResourceItem> vaultStakerOpt = detail.items().stream()
-                                                .flatMap(item -> item.nonFungibleResources().items().stream())
-                                                .filter(resourceItem -> resourceItem.resourceAddress().equals("resource_rdx1n2jvd76sc44p2ef6nwuakh6wzlnfuzfn3zk278qrksuz442vatn2dm"))
-                                                .findFirst();
-                                        vaultStakerOpt.ifPresent(any -> {
-                                            rolesShouldHave.add(staker);
-                                            rolesShouldHave.add(holder);
-                                        });
+            removals.forEach((role, members) ->
+                    members.forEach(member -> scope.fork(() -> {
+                        removeRole(role, member).submit();
+                        return null;
+                    }))
+            );
 
+            scope.join();
+            try {
+                scope.throwIfFailed();
+            } catch (ExecutionException e) {
+                throw new RuntimeException("Failed submitting Discord updates", e);
+            }
+        }
 
-                                        List<Role> rolesShouldntHave = allRoles.stream().filter(role -> !rolesShouldHave.contains(role)).toList();
-                                        Member member = danGuild.getMemberById(wallet.getDiscordId());
-                                        List<Role> alreadyHas = member.getRoles().stream()
-                                                .filter(allRoles::contains).toList();
-                                        return Tuple3.of(member, rolesShouldHave.stream()
-                                                .filter(role -> !alreadyHas.contains(role)).toList(), rolesShouldntHave.stream().filter(alreadyHas::contains).toList());
-
-                                    });
-                        }
-                ).concatenate().collect().asList().onItem().transform(list -> {
-                    Map<Role, List<Member>> shouldHaveMapping = list.stream()
-                            .flatMap(tuple -> tuple.getItem2().stream().map(l -> new AbstractMap.SimpleEntry<>(l, tuple.getItem1())))
-                            .collect(Collectors.groupingBy(
-                                    Map.Entry::getKey,
-                                    Collectors.mapping(Map.Entry::getValue, Collectors.toList())
-                            ));
-
-                    Map<Role, List<Member>> shouldNotHaveMapping = list.stream()
-                            .flatMap(tuple -> tuple.getItem3().stream().map(l -> new AbstractMap.SimpleEntry<>(l, tuple.getItem1())))
-                            .collect(Collectors.groupingBy(
-                                    Map.Entry::getKey,
-                                    Collectors.mapping(Map.Entry::getValue, Collectors.toList())
-                            ));
-                    return Tuple2.of(shouldHaveMapping, shouldNotHaveMapping);
-                })
-                .onItem().transformToUni(tuple2 -> {
-                    if (tuple2.getItem1().isEmpty() && tuple2.getItem2().isEmpty()) {
-                        return Uni.createFrom().voidItem();
-                    }
-                    Map<Role, List<Member>> additions = tuple2.getItem1();
-                    Map<Role, List<Member>> removals = tuple2.getItem2();
-
-                    Set<Uni<Member>> addOperation = additions.entrySet().stream()
-                            .flatMap(entry -> {
-                                return entry.getValue().stream().map(member -> Uni
-                                        .createFrom()
-                                        .item(addRoles(entry.getKey(), member).get())
-                                        .runSubscriptionOn(Infrastructure.getDefaultWorkerPool()) // Switch to a worker thread
-                                        .onItem()
-                                        .invoke(RestAction::queue)
-                                        .onItem()
-                                        .delayIt().by(Duration.of(500, ChronoUnit.MILLIS))
-                                        .onItem()
-                                        .transform(any -> member));
-                            }).collect(Collectors.toSet());
-
-                    Set<Uni<Member>> removeOperation = removals.entrySet().stream()
-                            .flatMap(entry -> {
-                                return entry.getValue().stream().map(member -> Uni
-                                        .createFrom()
-                                        .item(removeRoles(entry.getKey(), member).get())
-                                        .runSubscriptionOn(Infrastructure.getDefaultWorkerPool()) // Switch to a worker thread
-                                        .onItem()
-                                        .invoke(RestAction::queue)
-                                        .onItem()
-                                        .delayIt().by(Duration.of(500, ChronoUnit.MILLIS))
-                                        .onItem()
-                                        .transform(any -> member));
-                            }).collect(Collectors.toSet());
-
-
-                    addOperation.addAll(removeOperation);
-                    return Uni.combine().all().unis(addOperation)
-                            .usingConcurrencyOf(1).discardItems();
-                }).emitOn(MutinyHelper.executor(context));
+        log.info("All role updates submitted to JDA.");
     }
 
+    // Process a single wallet and populate additions/removals maps
+    private void processWallet(Wallet wallet,
+                               Map<Role, Queue<Member>> additions,
+                               Map<Role, Queue<Member>> removals) {
+        try {
+//            Member member = guild.getMemberById(wallet.getDiscordId());
+//            if (member == null) return;
 
-    @NotNull
-    private Supplier<AuditableRestAction<Void>> removeRoles(
-            net.dv8tion.jda.api.entities.Role discordRole,
-            Member member) {
-        return () -> danGuild
-                .removeRoleFromMember(
-                        member,
-                        discordRole);
+            GetNonFungibleVaultsResponse detail = radixClient.nonFungibleVaults(
+                    new GetNonFungibleVaultsRequest(wallet.getAddress(), "resource_rdx1nfju0xwzc4nrz3pk6u8z3xqlv0d5nz6egalpfjzds4zkfn3w5fv44d")
+            );
+
+            Set<Role> rolesShouldHave = computeRoles(detail);
+
+            List<Role> rolesShouldntHave = allRoles.stream()
+                    .filter(role -> !rolesShouldHave.contains(role))
+                    .toList();
+//            List<Role> alreadyHas = member.getRoles().stream()
+//                    .filter(allRoles::contains)
+//                    .toList();
+
+//            for (Role role : rolesShouldHave) {
+//                if (!alreadyHas.contains(role)) {
+//                    additions.computeIfAbsent(role, r -> new ConcurrentLinkedQueue<>()).add(member);
+//                }
+//            }
+//            for (Role role : rolesShouldntHave) {
+//                if (alreadyHas.contains(role)) {
+//                    removals.computeIfAbsent(role, r -> new ConcurrentLinkedQueue<>()).add(member);
+//                }
+//            }
+
+        } catch (Exception e) {
+            log.error("Failed processing wallet for roles", e);
+        }
     }
 
-    @NotNull
-    private Supplier<AuditableRestAction<Void>> addRoles(
-            net.dv8tion.jda.api.entities.Role discordRole,
-            Member member) {
-        return () -> danGuild
-                .addRoleToMember(
-                        member,
-                        discordRole);
+    // Determine which roles a wallet should have based on on-chain state
+    private Set<Role> computeRoles(GetNonFungibleVaultsResponse detail) {
+        Set<Role> roles = new HashSet<>();
+        if(detail.items().isEmpty()) {
+            return roles;
+        }
+        int sum = detail.items()
+                .stream().mapToInt(item -> item.totalCount()).sum();
+        if(sum >= 1 && sum <= 19) {
+            roles.add(holder);
+        }
+        if(sum >= 20) {
+            roles.add(holder);
+            roles.add(whale);
+        }
+
+        return roles;
+    }
+
+    // Discord role actions
+    private AuditableRestAction<Void> addRole(Role role, Member member) {
+        return guild.addRoleToMember(member, role);
+    }
+
+    private AuditableRestAction<Void> removeRole(Role role, Member member) {
+        return guild.removeRoleFromMember(member, role);
     }
 }
+
+

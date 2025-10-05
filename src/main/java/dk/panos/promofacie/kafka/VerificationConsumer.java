@@ -2,38 +2,29 @@ package dk.panos.promofacie.kafka;
 
 import dk.panos.promofacie.db.Wallet;
 import dk.panos.promofacie.kafka.model.VerificationOutcome;
-import dk.panos.promofacie.redis.RedisVerificationService;
-import io.quarkus.hibernate.reactive.panache.common.WithTransaction;
 import io.quarkus.panache.common.Parameters;
-import io.smallrye.mutiny.Uni;
+import jakarta.transaction.Transactional;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
 import org.eclipse.microprofile.reactive.messaging.Incoming;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @ApplicationScoped
-@WithTransaction
 public class VerificationConsumer {
-    @Inject
-    RedisVerificationService redisVerificationService;
     private static Logger log = LoggerFactory.getLogger(VerificationConsumer.class);
 
     @Incoming("verifier-rdx")
-    public Uni<Void> handleVerificationOutcome(VerificationOutcome verificationOutcome) {
-        if (verificationOutcome.getPurpose().equals("WALLET_VERIFICATION") && verificationOutcome.isOutcome()) {
-            return Wallet.<Wallet>find("discordId = :discord_id", Parameters.with("discord_id", verificationOutcome.getUserId()))
-                    .firstResult()
-                    .onItem().ifNull().continueWith(() -> {
-                        Wallet wallet = new Wallet();
-                        wallet.setDiscordId(verificationOutcome.getUserId());
-                        return wallet;
-                    })
-                    .onItem().transformToUni(wallet -> {
-                        wallet.setAddress(verificationOutcome.getAddress());
-                        return wallet.persist();
-                    }).replaceWithVoid();
+    @Transactional
+    public void handleVerificationOutcome(VerificationOutcome verificationOutcome) {
+        if ("WALLET_VERIFICATION".equals(verificationOutcome.getPurpose()) && verificationOutcome.isOutcome()) {
+            Wallet wallet = Wallet.find("discordId = :discord_id", Parameters.with("discord_id", verificationOutcome.getUserId()))
+                    .firstResult();
+            if (wallet == null) {
+                wallet = new Wallet();
+                wallet.setDiscordId(verificationOutcome.getUserId());
+            }
+            wallet.setAddress(verificationOutcome.getAddress());
+            wallet.persist();
         }
-        return Uni.createFrom().voidItem();
     }
 }

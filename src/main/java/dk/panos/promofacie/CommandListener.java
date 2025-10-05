@@ -26,9 +26,9 @@ public class CommandListener extends ListenerAdapter {
                 event.getHook().editOriginal("That doesn't seem a valid rdx address").queue();
                 return;
             }
-            verificationService.queue(new Verification(event.getOption("address").getAsString(), event.getUser().getId(), ZonedDateTime.now(ZoneOffset.UTC).minusMinutes(5)))
-                    .onItem().invoke(tries -> event.getHook().editOriginal("Please send any amount to account_rdx129wl7trqd7ttwfd2nx9tf3qgag6n2e5tjs3t9cfgslpp3yxh526e2u but set message: "+event.getUser().getId()).queue())
-                    .subscribe().with(x-> log.debug("Adding for verify: {} {}", event.getOption("address").getAsString(), event.getUser().getId()));
+            verificationService.queue(new Verification(event.getOption("address").getAsString(), event.getUser().getId(), ZonedDateTime.now(ZoneOffset.UTC).minusMinutes(5)));
+            event.getHook().editOriginal("Please send 0 XRD to VerifyNFT.xrd but set message: "+event.getUser().getId()).queue();
+            log.debug("Adding for verify: {} {}", event.getOption("address").getAsString(), event.getUser().getId());
         }
 
     }

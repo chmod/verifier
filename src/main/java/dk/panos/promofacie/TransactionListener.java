@@ -4,26 +4,21 @@ import dk.panos.promofacie.kafka.KafkaVerificationService;
 import dk.panos.promofacie.redis.RedisVerificationService;
 import dk.panos.promofacie.redis.redis_model.Verification;
 import dk.panos.promofacie.service.BlockchainVerificationService;
-import io.quarkus.arc.profile.IfBuildProfile;
-import io.quarkus.runtime.StartupEvent;
 import io.quarkus.scheduler.Scheduled;
-import io.smallrye.mutiny.Multi;
-import io.smallrye.mutiny.Uni;
-import io.smallrye.mutiny.tuples.Tuple2;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
-import java.time.temporal.ChronoUnit;
-import java.util.function.Function;
+import java.util.Set;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Executors;
 
 @ApplicationScoped
-//@IfBuildProfile("prod")
 public class TransactionListener {
-    private static Logger log = LoggerFactory.getLogger(TransactionListener.class);
+    private static final Logger log = LoggerFactory.getLogger(TransactionListener.class);
     @Inject
     RedisVerificationService verificationService;
     @Inject
@@ -31,42 +26,41 @@ public class TransactionListener {
     @Inject
     KafkaVerificationService kafkaVerificationService;
 
-    @Scheduled(every = "5m")
-    Uni<Void> listen() {
-        return verificationService.process()
-                .onItem().invoke(items -> log.debug("I have the following items for verification {}", items))
-                .toMulti()
-                .onItem()
-                .transformToIterable(Function.identity())
-                .onItem()
-                .invoke(verification -> log.debug("Picked {} for verification", verification))
-                .onItem()
-                .transformToUni(verification ->
-                        blockchainVerificationService.transactionExists(verification.address(), verification.discordId(), verification.dateTime())
-                                .onFailure().invoke(err -> log.error(err.getMessage()))
-                                .onFailure().retry().withBackOff(Duration.ofMillis(100))
-                                .atMost(100)
-                                .map(outcome -> Tuple2.of(verification, outcome))
-                ).merge(4).onItem()
-                .transformToUni(outcome -> {
-                    Verification verification = outcome.getItem1();
-                    boolean success = outcome.getItem2();
-                    if (success) {
-                        log.debug("Sending success for {}", verification);
-                        return kafkaVerificationService.sendSuccess(verification);
-                    } else {
-                        return verificationService.queue(verification)
-                                .onItem().transformToUni(itemsAdded -> {
-                                    if (itemsAdded > 0) {
-                                        log.debug("Retrying {}", verification);
-                                        return Uni.createFrom().voidItem();
-                                    } else {
-                                        log.debug("Sending failure for {} due to reached max amount of tries", verification);
-                                        return kafkaVerificationService.sendFailure(verification);
-                                    }
-                                });
-                    }
-                })
-                .concatenate().collect().asList().replaceWithVoid();
+    @Scheduled(every = "10s")
+    void listen() {
+        try {
+            Set<Verification> items = verificationService.process();
+            log.debug("I have the following items for verification {}", items);
+
+            try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                List<Callable<Void>> tasks = new ArrayList<>();
+                for (Verification verification : items) {
+                    tasks.add(() -> {
+                        try {
+                            log.debug("Picked {} for verification", verification);
+                            boolean success = blockchainVerificationService.transactionExists(verification.address(), verification.discordId(), verification.dateTime());
+                            if (success) {
+                                log.debug("Sending success for {}", verification);
+                                kafkaVerificationService.sendSuccess(verification);
+                            } else {
+                                int itemsAdded = verificationService.queue(verification);
+                                if (itemsAdded > 0) {
+                                    log.debug("Retrying {}", verification);
+                                } else {
+                                    log.debug("Sending failure for {} due to reached max amount of tries", verification);
+                                    kafkaVerificationService.sendFailure(verification);
+                                }
+                            }
+                        } catch (Exception e) {
+                            log.error("Error processing verification {}", verification, e);
+                        }
+                        return null;
+                    });
+                }
+                executor.invokeAll(tasks);
+            }
+        } catch (Exception e) {
+            log.error("Failed to process verification items", e);
+        }
     }
 }

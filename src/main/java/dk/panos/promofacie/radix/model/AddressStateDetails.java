@@ -2,12 +2,10 @@ package dk.panos.promofacie.radix.model;
 
 import java.util.List;
 
-// Define the main record that encompasses the entire JSON structure
 public record AddressStateDetails(
         LedgerState ledgerState,
         List<Item> items
 ) {
-    // Define the LedgerState record
     public record LedgerState(
             String network,
             int stateVersion,
@@ -15,14 +13,12 @@ public record AddressStateDetails(
             int round
     ) {}
 
-    // Define the Item record
     public record Item(
             String address,
             FungibleResources fungibleResources,
             NonFungibleResources nonFungibleResources
     ) {}
 
-    // Define the FungibleResources record
     public record FungibleResources(
             List<ResourceItem> items
     ) {}
@@ -31,7 +27,6 @@ public record AddressStateDetails(
             List<ResourceItem> items
     ) {}
 
-    // Define the ResourceItem record
     public record ResourceItem(
             Vaults vaults,
             String aggregationLevel,
@@ -39,19 +34,16 @@ public record AddressStateDetails(
             ExplicitMetadata explicitMetadata
     ) {}
 
-    // Define the Vaults record
     public record Vaults(
             int totalCount,
             List<Vault> items
     ) {}
 
-    // Define the Vault record
     public record Vault(
             String vaultAddress,
             String amount
     ) {}
 
-    // Define the ExplicitMetadata record
     public record ExplicitMetadata(
             int totalCount,
             List<MetadataItem> items
