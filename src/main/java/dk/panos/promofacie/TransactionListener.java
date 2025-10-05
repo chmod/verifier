@@ -26,7 +26,7 @@ public class TransactionListener {
     @Inject
     KafkaVerificationService kafkaVerificationService;
 
-    @Scheduled(every = "10s")
+    @Scheduled(every = "15m")
     void listen() {
         try {
             Set<Verification> items = verificationService.process();

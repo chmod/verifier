@@ -17,7 +17,7 @@ public class Scheduler {
     @Inject
     RoleService roleService;
 
-//    @Scheduled(every = "15m")
+    @Scheduled(every = "15m")
     public void cronJobWithExpressionInConfig() {
         try {
             roleService.applyRoles();

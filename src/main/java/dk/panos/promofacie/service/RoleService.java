@@ -31,14 +31,12 @@ public class RoleService {
     private final Role holder;
     private final Role whale;
     private final List<Role> allRoles;
-    private final BigDecimal holderBigInt = BigDecimal.valueOf(1_500_000L);
-    private final BigDecimal whaleBigInt = BigDecimal.valueOf(1_000_000_000L);
 
     @Inject
     public RoleService(JDA discordAPI) {
         this.guild = discordAPI.getGuildById(guildId);
-        holder = null;//guild.getRoleById(1424056936726532237L);
-        whale = null;//guild.getRoleById(1424057237273444543L);
+        holder = guild.getRoleById(1424056936726532237L);
+        whale = guihttps://discord.com/oauth2/authorize?client_id=1272303152829435986ld.getRoleById(1424057237273444543L);
         allRoles = List.of();
     }
 
@@ -107,8 +105,8 @@ public class RoleService {
                                Map<Role, Queue<Member>> additions,
                                Map<Role, Queue<Member>> removals) {
         try {
-//            Member member = guild.getMemberById(wallet.getDiscordId());
-//            if (member == null) return;
+            Member member = guild.getMemberById(wallet.getDiscordId());
+            if (member == null) return;
 
             GetNonFungibleVaultsResponse detail = radixClient.nonFungibleVaults(
                     new GetNonFungibleVaultsRequest(wallet.getAddress(), "resource_rdx1nfju0xwzc4nrz3pk6u8z3xqlv0d5nz6egalpfjzds4zkfn3w5fv44d")
@@ -119,20 +117,20 @@ public class RoleService {
             List<Role> rolesShouldntHave = allRoles.stream()
                     .filter(role -> !rolesShouldHave.contains(role))
                     .toList();
-//            List<Role> alreadyHas = member.getRoles().stream()
-//                    .filter(allRoles::contains)
-//                    .toList();
+            List<Role> alreadyHas = member.getRoles().stream()
+                    .filter(allRoles::contains)
+                    .toList();
 
-//            for (Role role : rolesShouldHave) {
-//                if (!alreadyHas.contains(role)) {
-//                    additions.computeIfAbsent(role, r -> new ConcurrentLinkedQueue<>()).add(member);
-//                }
-//            }
-//            for (Role role : rolesShouldntHave) {
-//                if (alreadyHas.contains(role)) {
-//                    removals.computeIfAbsent(role, r -> new ConcurrentLinkedQueue<>()).add(member);
-//                }
-//            }
+            for (Role role : rolesShouldHave) {
+                if (!alreadyHas.contains(role)) {
+                    additions.computeIfAbsent(role, r -> new ConcurrentLinkedQueue<>()).add(member);
+                }
+            }
+            for (Role role : rolesShouldntHave) {
+                if (alreadyHas.contains(role)) {
+                    removals.computeIfAbsent(role, r -> new ConcurrentLinkedQueue<>()).add(member);
+                }
+            }
 
         } catch (Exception e) {
             log.error("Failed processing wallet for roles", e);
@@ -142,15 +140,15 @@ public class RoleService {
     // Determine which roles a wallet should have based on on-chain state
     private Set<Role> computeRoles(GetNonFungibleVaultsResponse detail) {
         Set<Role> roles = new HashSet<>();
-        if(detail.items().isEmpty()) {
+        if (detail.items().isEmpty()) {
             return roles;
         }
         int sum = detail.items()
                 .stream().mapToInt(item -> item.totalCount()).sum();
-        if(sum >= 1 && sum <= 19) {
+        if (sum >= 1 && sum <= 19) {
             roles.add(holder);
         }
-        if(sum >= 20) {
+        if (sum >= 20) {
             roles.add(holder);
             roles.add(whale);
         }
