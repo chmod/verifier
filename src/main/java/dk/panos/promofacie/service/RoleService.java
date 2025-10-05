@@ -36,7 +36,7 @@ public class RoleService {
     public RoleService(JDA discordAPI) {
         this.guild = discordAPI.getGuildById(guildId);
         holder = guild.getRoleById(1424056936726532237L);
-        whale = guihttps://discord.com/oauth2/authorize?client_id=1272303152829435986ld.getRoleById(1424057237273444543L);
+        whale = guild.getRoleById(1424057237273444543L);
         allRoles = List.of();
     }
 
