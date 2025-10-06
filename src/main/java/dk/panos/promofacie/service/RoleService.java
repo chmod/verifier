@@ -37,7 +37,7 @@ public class RoleService {
         this.guild = discordAPI.getGuildById(guildId);
         holder = guild.getRoleById(1424056936726532237L);
         whale = guild.getRoleById(1424057237273444543L);
-        allRoles = List.of();
+        allRoles = List.of(holder, whale);
     }
 
     /**
