@@ -4,6 +4,7 @@ import dk.panos.promofacie.redis.RedisVerificationService;
 import dk.panos.promofacie.redis.redis_model.Verification;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import org.slf4j.Logger;
@@ -27,10 +28,20 @@ public class CommandListener extends ListenerAdapter {
                 return;
             }
             verificationService.queue(new Verification(event.getOption("address").getAsString(), event.getUser().getId(), ZonedDateTime.now(ZoneOffset.UTC).minusMinutes(5)));
-            event.getHook().editOriginal("Please send 0 XRD to VerifyNFT.xrd but set message:")
-                    .queue(msg -> event.getHook().sendMessage(event.getUser().getId())
-                            .setEphemeral(true)
-                            .queue());
+            event.getHook().editOriginal("Please send 0 XRD to the address below with your verification ID as the message:")
+                    .queue(success -> {
+                        EmbedBuilder embed = new EmbedBuilder()
+                                .setTitle("Verification Details")
+                                .setColor(0x00FF00)
+                                .addField("Send to Address", "```VerifyNFT.xrd```", false)
+                                .addField("Verification ID (use as message)", "```" + event.getUser().getId() + "```", false)
+                                .setFooter("Tap the code blocks above to copy");
+
+                        event.getHook().sendMessageEmbeds(embed.build())
+                                .setEphemeral(true)
+                                .queue();
+                    });
+
 
             log.debug("Adding for verify: {} {}", event.getOption("address").getAsString(), event.getUser().getId());
         }
