@@ -22,12 +22,16 @@ public class CommandListener extends ListenerAdapter {
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
         if (event.getName().equals("verify")) {
             event.deferReply(true).queue();
-            if(!event.getOption("address").getAsString().startsWith("account_rdx")) {
+            if (!event.getOption("address").getAsString().startsWith("account_rdx")) {
                 event.getHook().editOriginal("That doesn't seem a valid rdx address").queue();
                 return;
             }
             verificationService.queue(new Verification(event.getOption("address").getAsString(), event.getUser().getId(), ZonedDateTime.now(ZoneOffset.UTC).minusMinutes(5)));
-            event.getHook().editOriginal("Please send 0 XRD to VerifyNFT.xrd but set message: "+event.getUser().getId()).queue();
+            event.getHook().editOriginal("Please send 0 XRD to VerifyNFT.xrd but set message:")
+                    .queue();
+
+            event.getHook().sendMessage(event.getUser().getId())
+                    .queue();
             log.debug("Adding for verify: {} {}", event.getOption("address").getAsString(), event.getUser().getId());
         }
 
