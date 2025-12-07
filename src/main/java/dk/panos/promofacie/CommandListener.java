@@ -28,11 +28,10 @@ public class CommandListener extends ListenerAdapter {
             }
             verificationService.queue(new Verification(event.getOption("address").getAsString(), event.getUser().getId(), ZonedDateTime.now(ZoneOffset.UTC).minusMinutes(5)));
             event.getHook().editOriginal("Please send 0 XRD to VerifyNFT.xrd but set message:")
-                    .queue();
+                    .queue(msg -> event.getHook().sendMessage(event.getUser().getId())
+                            .setEphemeral(true)
+                            .queue());
 
-            event.getHook().sendMessage(event.getUser().getId())
-                    .setEphemeral(true)
-                    .queue();
             log.debug("Adding for verify: {} {}", event.getOption("address").getAsString(), event.getUser().getId());
         }
 
