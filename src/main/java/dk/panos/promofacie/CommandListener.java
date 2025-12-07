@@ -2,8 +2,11 @@ package dk.panos.promofacie;
 
 import dk.panos.promofacie.redis.RedisVerificationService;
 import dk.panos.promofacie.redis.redis_model.Verification;
+import dk.panos.promofacie.v2.EventProducer;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import net.dv8tion.jda.api.events.guild.member.GuildMemberJoinEvent;
+import net.dv8tion.jda.api.events.guild.member.GuildMemberRemoveEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import org.slf4j.Logger;
@@ -16,6 +19,8 @@ import java.time.ZonedDateTime;
 public class CommandListener extends ListenerAdapter {
     @Inject
     RedisVerificationService verificationService;
+    @Inject
+    EventProducer producer;
     private static final Logger log = LoggerFactory.getLogger(CommandListener.class);
 
     @Override
@@ -33,5 +38,25 @@ public class CommandListener extends ListenerAdapter {
 
     }
 
+    @Override
+    public void onGuildMemberJoin(GuildMemberJoinEvent event) {
+        String guildId = event.getGuild().getId();
+        String userId = event.getUser().getId();
 
+        log.info("User " + userId + " joined guild " + guildId);
+
+        // Emit to Kafka - let consumer handle it asynchronously
+        producer.emitMemberJoin(userId, guildId);
+    }
+
+    @Override
+    public void onGuildMemberRemove(GuildMemberRemoveEvent event) {
+        String guildId = event.getGuild().getId();
+        String userId = event.getUser().getId();
+
+        log.info("User " + userId + " left guild " + guildId);
+
+        // Emit to Kafka - let consumer handle it asynchronously
+        producer.emitMemberLeave(userId, guildId);
+    }
 }

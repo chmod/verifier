@@ -1,6 +1,10 @@
 package dk.panos.promofacie.radix;
 
 import dk.panos.promofacie.radix.model.*;
+import dk.panos.promofacie.v2.EntityDetailsRequest;
+import dk.panos.promofacie.v2.EntityDetailsResponse;
+import dk.panos.promofacie.v2.NFTDataRequest;
+import dk.panos.promofacie.v2.NFTDataResponse;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -20,4 +24,16 @@ public interface RadixClient {
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
     GetNonFungibleVaultsResponse nonFungibleVaults(GetNonFungibleVaultsRequest request);
+
+    @POST
+    @Path("/state/entity/details")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    EntityDetailsResponse getEntityDetails(EntityDetailsRequest request);
+
+    @POST
+    @Path("/state/non-fungible/data")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    NFTDataResponse getNFTData(NFTDataRequest request);
 }
