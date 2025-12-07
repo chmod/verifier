@@ -31,6 +31,7 @@ public class CommandListener extends ListenerAdapter {
                     .queue();
 
             event.getHook().sendMessage(event.getUser().getId())
+                    .setEphemeral(true)
                     .queue();
             log.debug("Adding for verify: {} {}", event.getOption("address").getAsString(), event.getUser().getId());
         }
