@@ -34,7 +34,7 @@ public class CommandListener extends ListenerAdapter {
                                 .setTitle("Verification Details")
                                 .setColor(0x00FF00)
                                 .addField("Send to Address", "```VerifyNFT.xrd```", false)
-                                .addField("Verification ID (use as message)", "```" + event.getUser().getId() + "```", false)
+                                .addField("Verification ID (use as tx message)", "```" + event.getUser().getId() + "```", false)
                                 .setFooter("Tap the code blocks above to copy");
 
                         event.getHook().sendMessageEmbeds(embed.build())
