@@ -79,6 +79,17 @@
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-rest-jackson</artifactId>
         </dependency>
+        <!-- Source: https://mvnrepository.com/artifact/org.cardanofoundation/cip30-data-signature-parser -->
+        <dependency>
+            <groupId>org.cardanofoundation</groupId>
+            <artifactId>cip30-data-signature-parser</artifactId>
+            <version>0.0.12</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-oidc</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit5</artifactId>

@@ -45,7 +45,7 @@ public class RoleService {
      * Uses virtual threads and structured concurrency.
      */
     public void applyRoles() throws InterruptedException {
-        List<Wallet> wallets = Wallet.listAll();
+        List<Wallet> wallets = Wallet.list("chain = RADIX");
 
         // Thread-safe collections for concurrent updates
         Map<Role, Queue<Member>> additions = new ConcurrentHashMap<>();
