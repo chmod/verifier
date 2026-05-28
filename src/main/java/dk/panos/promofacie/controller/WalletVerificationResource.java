@@ -17,6 +17,8 @@ import org.cardanofoundation.cip30.CIP30Verifier;
 import org.cardanofoundation.cip30.Cip30VerificationResult;
 import org.cardanofoundation.cip30.MessageFormat;
 import org.eclipse.microprofile.jwt.JsonWebToken;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.security.SecureRandom;
 import java.time.Instant;
@@ -30,6 +32,7 @@ import static dk.panos.promofacie.db.Chain.CARDANO;
 @Path("/api/wallet")
 @Authenticated
 public class WalletVerificationResource {
+    private static final Logger log = LoggerFactory.getLogger(WalletVerificationResource.class);
     @Inject
     JsonWebToken jwt;
     private final ConcurrentHashMap<String, NonceEntry> nonces = new ConcurrentHashMap<>();
@@ -52,15 +55,15 @@ public class WalletVerificationResource {
     @Transactional
     public Response verify(VerifyRequest req) {
         String discordId = jwt.getClaim("discord_id");
-
         Optional<PanacheEntityBase> walletOptional = Wallet.find(
                 "discordId = :discord_id and chain = :chain and address = :address",
                 Parameters.with("discord_id", discordId)
                         .and("chain", CARDANO)
                         .and("address", req.stakeAddress())
         ).firstResultOptional();
-        if (walletOptional.isEmpty())
+        if (walletOptional.isPresent()) {
             return Response.status(409).build();
+        }
 
         NonceEntry entry = nonces.remove(discordId);
         if (entry == null || entry.isExpired())
