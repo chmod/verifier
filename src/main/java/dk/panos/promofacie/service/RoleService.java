@@ -1,10 +1,12 @@
 package dk.panos.promofacie.service;
 
+import dk.panos.promofacie.db.Chain;
 import dk.panos.promofacie.db.Wallet;
 import dk.panos.promofacie.radix.RadixClient;
 import dk.panos.promofacie.radix.model.AddressStateDetails;
 import dk.panos.promofacie.radix.model.GetNonFungibleVaultsRequest;
 import dk.panos.promofacie.radix.model.GetNonFungibleVaultsResponse;
+import io.quarkus.panache.common.Parameters;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import net.dv8tion.jda.api.JDA;
@@ -45,7 +47,7 @@ public class RoleService {
      * Uses virtual threads and structured concurrency.
      */
     public void applyRoles() throws InterruptedException {
-        List<Wallet> wallets = Wallet.list("chain = RADIX");
+        List<Wallet> wallets = Wallet.list("chain = :chain", Parameters.with("chain", Chain.RADIX));
 
         // Thread-safe collections for concurrent updates
         Map<Role, Queue<Member>> additions = new ConcurrentHashMap<>();

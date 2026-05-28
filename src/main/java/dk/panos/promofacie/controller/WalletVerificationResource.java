@@ -51,7 +51,7 @@ public class WalletVerificationResource {
     public Response verify(VerifyRequest req) {
         String discordId = jwt.getClaim("discord_id");
 
-        Optional<Wallet> walletOptional = Wallet.find("discordId = :discord_id and chain = CARDANO", Parameters.with("discord_id", discordId))
+        Optional<Wallet> walletOptional = Wallet.find("discordId = :discord_id and chain = :chain", Parameters.with("discord_id", discordId).and("chain", CARDANO))
                 .firstResultOptional();
         if (walletOptional.isEmpty())
             return Response.status(409).build();

@@ -14,7 +14,7 @@ public class VerificationConsumer {
     @Transactional
     public void handleVerificationOutcome(VerificationOutcome verificationOutcome) {
         if ("WALLET_VERIFICATION".equals(verificationOutcome.getPurpose()) && verificationOutcome.isOutcome()) {
-            Wallet wallet = Wallet.find("discordId = :discord_id and chain = RADIX", Parameters.with("discord_id", verificationOutcome.getUserId()))
+            Wallet wallet = Wallet.find("discordId = :discord_id and chain = :chain", Parameters.with("discord_id", verificationOutcome.getUserId()).and("chain", Chain.RADIX))
                     .firstResult();
             if (wallet == null) {
                 wallet = new Wallet();
