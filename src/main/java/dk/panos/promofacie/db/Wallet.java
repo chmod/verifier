@@ -9,7 +9,9 @@ import jakarta.persistence.*;
         @Index(name = "idx_wallet_chain", columnList = "chain")
 })
 public class Wallet extends PanacheEntity {
+    @Column(unique = true, nullable = false)
     private String address;
+    @Column(nullable = false)
     private String discordId;
     @Enumerated(EnumType.STRING)
     @Column(name = "chain")

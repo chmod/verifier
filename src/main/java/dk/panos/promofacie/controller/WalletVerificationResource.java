@@ -2,7 +2,9 @@ package dk.panos.promofacie.controller;
 
 import dk.panos.promofacie.controller.model.NonceEntry;
 import dk.panos.promofacie.controller.model.VerifyRequest;
+import dk.panos.promofacie.db.Chain;
 import dk.panos.promofacie.db.Wallet;
+import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import io.quarkus.panache.common.Parameters;
 import io.quarkus.security.Authenticated;
 import jakarta.inject.Inject;
@@ -51,8 +53,12 @@ public class WalletVerificationResource {
     public Response verify(VerifyRequest req) {
         String discordId = jwt.getClaim("discord_id");
 
-        Optional<Wallet> walletOptional = Wallet.find("discordId = :discord_id and chain = :chain", Parameters.with("discord_id", discordId).and("chain", CARDANO))
-                .firstResultOptional();
+        Optional<PanacheEntityBase> walletOptional = Wallet.find(
+                "discordId = :discord_id and chain = :chain and address = :address",
+                Parameters.with("discord_id", discordId)
+                        .and("chain", CARDANO)
+                        .and("address", req.stakeAddress())
+        ).firstResultOptional();
         if (walletOptional.isEmpty())
             return Response.status(409).build();
 
