@@ -31,7 +31,7 @@ public class Scheduler {
 //        }
     }
 
-    @Scheduled(every = "15m")
+    @Scheduled(every = "1h")
     public void betskiCardano() {
         try {
             cardanoRoleService.applyRoles();
