@@ -2,13 +2,10 @@ package dk.panos.promofacie.controller;
 
 import dk.panos.promofacie.controller.model.NonceEntry;
 import dk.panos.promofacie.controller.model.VerifyRequest;
-import dk.panos.promofacie.db.Chain;
-import dk.panos.promofacie.db.Wallet;
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
-import io.quarkus.panache.common.Parameters;
+import dk.panos.promofacie.db.WalletPersistenceService;
+import dk.panos.promofacie.kafka.model.WalletTrackingCommand;
 import io.quarkus.security.Authenticated;
 import jakarta.inject.Inject;
-import jakarta.transaction.Transactional;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.core.Response;
@@ -17,6 +14,8 @@ import org.cardanofoundation.cip30.CIP30Verifier;
 import org.cardanofoundation.cip30.Cip30VerificationResult;
 import org.cardanofoundation.cip30.MessageFormat;
 import org.eclipse.microprofile.jwt.JsonWebToken;
+import org.eclipse.microprofile.reactive.messaging.Channel;
+import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,17 +23,23 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-
-import static dk.panos.promofacie.db.Chain.CARDANO;
 
 @Path("/api/wallet")
 @Authenticated
 public class WalletVerificationResource {
     private static final Logger log = LoggerFactory.getLogger(WalletVerificationResource.class);
+
     @Inject
     JsonWebToken jwt;
+
+    @Inject
+    @Channel("wallet-tracking-out")
+    Emitter<WalletTrackingCommand> walletTrackingEmitter;
+
+    @Inject
+    WalletPersistenceService walletPersistenceService;
+
     private final ConcurrentHashMap<String, NonceEntry> nonces = new ConcurrentHashMap<>();
 
     @POST
@@ -52,18 +57,8 @@ public class WalletVerificationResource {
 
     @POST
     @Path("/verify")
-    @Transactional
     public Response verify(VerifyRequest req) {
         String discordId = jwt.getClaim("discord_id");
-        Optional<PanacheEntityBase> walletOptional = Wallet.find(
-                "discordId = :discord_id and chain = :chain and address = :address",
-                Parameters.with("discord_id", discordId)
-                        .and("chain", CARDANO)
-                        .and("address", req.stakeAddress())
-        ).firstResultOptional();
-        if (walletOptional.isPresent()) {
-            return Response.status(409).build();
-        }
 
         NonceEntry entry = nonces.remove(discordId);
         if (entry == null || entry.isExpired())
@@ -72,11 +67,15 @@ public class WalletVerificationResource {
         if (!verifyWalletOwnership(req.stakeAddress(), req.signature(), req.key(), entry.nonce()))
             return Response.status(400).entity(Map.of("message", "Signature verification failed")).build();
 
-        Wallet wallet = new Wallet();
-        wallet.setAddress(req.stakeAddress());
-        wallet.setDiscordId(discordId);
-        wallet.setChain(CARDANO);
-        wallet.persist();
+        walletTrackingEmitter.send(new WalletTrackingCommand(WalletTrackingCommand.Action.ADD, req.stakeAddress()))
+                .whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        log.error("Failed to send wallet tracking command stakeAddress={}: {}", req.stakeAddress(), ex.getMessage(), ex);
+                    } else {
+                        walletPersistenceService.persist(req.stakeAddress(), discordId);
+                    }
+                });
+
         return Response.ok(Map.of("discordId", discordId, "stakeAddress", req.stakeAddress())).build();
     }
 
