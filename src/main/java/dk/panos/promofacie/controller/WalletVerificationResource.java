@@ -67,7 +67,7 @@ public class WalletVerificationResource {
 
         if (!verifyWalletOwnership(req.stakeAddress(), req.signature(), req.key(), entry.nonce()))
             return Response.status(400).entity(Map.of("message", "Signature verification failed")).build();
-
+        log.info("Signature verification successful for stakeAddress={} and discordId={}", req.stakeAddress(), discordId);
         walletTrackingEmitter.send(new WalletTrackingCommand(WalletTrackingCommand.Action.ADD, req.stakeAddress()))
                 .whenComplete((result, ex) -> {
                     if (ex != null) {
