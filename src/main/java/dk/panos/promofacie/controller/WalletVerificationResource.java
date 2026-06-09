@@ -45,13 +45,14 @@ public class WalletVerificationResource {
     @POST
     @Path("/challenge")
     public Response challenge() {
+        log.info("Challenge requested");
         String discordId = jwt.getClaim("discord_id");
-
+        log.info("Discord ID: {}", discordId);
         byte[] bytes = new byte[32];
         new SecureRandom().nextBytes(bytes);
         String nonce = HexFormat.of().formatHex(bytes);
-
         nonces.put(discordId, new NonceEntry(nonce, Instant.now().plusSeconds(300)));
+        log.info("Nonce: {}", nonce);
         return Response.ok(Map.of("nonce", nonce)).build();
     }
 
