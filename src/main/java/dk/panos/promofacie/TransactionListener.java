@@ -1,20 +1,12 @@
 package dk.panos.promofacie;
 
-import dk.panos.promofacie.kafka.KafkaVerificationService;
+import dk.panos.promofacie.kafka.UtxoTransactionConsumer;
 import dk.panos.promofacie.redis.RedisVerificationService;
-import dk.panos.promofacie.redis.redis_model.Verification;
 import dk.panos.promofacie.service.BlockchainVerificationService;
-import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.Set;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.Executors;
 
 @ApplicationScoped
 public class TransactionListener {
@@ -24,7 +16,7 @@ public class TransactionListener {
     @Inject
     BlockchainVerificationService blockchainVerificationService;
     @Inject
-    KafkaVerificationService kafkaVerificationService;
+    UtxoTransactionConsumer utxoTransactionConsumer;
 
 //    @Scheduled(every = "15m")
     void listen() {
