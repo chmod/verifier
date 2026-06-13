@@ -1,6 +1,6 @@
 package dk.panos.promofacie.config;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
+import io.quarkus.hibernate.orm.JsonFormat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import io.quarkus.hibernate.orm.PersistenceUnitExtension;
