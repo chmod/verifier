@@ -1,6 +1,7 @@
 package dk.panos.promofacie.kafka.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 
@@ -9,11 +10,16 @@ import java.util.List;
  * {@code spentInTxHash} is present only for spent UTxOs; omitted for created ones.
  */
 public record UtxoEntry(
+        @JsonProperty("txHash")
         String txHash,
+        @JsonProperty("outputIndex")
         int outputIndex,
+        @JsonProperty("address")
         String address,
+        @JsonProperty("amounts")
         List<AmountPayload> amounts,
         @JsonInclude(JsonInclude.Include.NON_NULL)
+        @JsonProperty("spentInTxHash")
         String spentInTxHash
 ) {
     /** Convenience factory for created UTxOs (no spentInTxHash). */
