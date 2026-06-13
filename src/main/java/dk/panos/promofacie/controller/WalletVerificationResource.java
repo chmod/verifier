@@ -3,7 +3,7 @@ package dk.panos.promofacie.controller;
 import dk.panos.promofacie.controller.model.NonceEntry;
 import dk.panos.promofacie.controller.model.VerifyRequest;
 import dk.panos.promofacie.db.WalletPersistenceService;
-import dk.panos.promofacie.kafka.model.WalletTrackingCommand;
+import dk.panos.promofacie.kafka.model.TrackingCommand;
 import io.quarkus.security.Authenticated;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.POST;
@@ -35,7 +35,7 @@ public class WalletVerificationResource {
 
     @Inject
     @Channel("wallet-tracking-out")
-    Emitter<WalletTrackingCommand> walletTrackingEmitter;
+    Emitter<TrackingCommand> walletTrackingEmitter;
 
     @Inject
     WalletPersistenceService walletPersistenceService;
@@ -68,10 +68,11 @@ public class WalletVerificationResource {
         if (!verifyWalletOwnership(req.stakeAddress(), req.signature(), req.key(), entry.nonce()))
             return Response.status(400).entity(Map.of("message", "Signature verification failed")).build();
         log.info("Signature verification successful for stakeAddress={} and discordId={}", req.stakeAddress(), discordId);
-        walletTrackingEmitter.send(new WalletTrackingCommand(WalletTrackingCommand.Action.ADD, req.stakeAddress()))
+        
+        walletTrackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, req.stakeAddress(), null))
                 .whenComplete((result, ex) -> {
                     if (ex != null) {
-                        log.error("Failed to send wallet tracking command stakeAddress={}: {}", req.stakeAddress(), ex.getMessage(), ex);
+                        log.error("Failed to send tracking command stakeAddress={}: {}", req.stakeAddress(), ex.getMessage(), ex);
                     } else {
                         walletPersistenceService.persist(req.stakeAddress(), discordId);
                     }
