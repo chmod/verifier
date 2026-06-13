@@ -10,7 +10,7 @@ import java.util.Objects;
 
 @Entity
 @Table(name = "user_asset_inventory", indexes = {
-        @Index(name = "idx_inventory_stake_policy", columnList = "stake_address, policyId")
+        @Index(name = "idx_inventory_stake_policy", columnList = "stake_address, policy_id")
 })
 public class UserAssetInventory extends PanacheEntityBase {
 
