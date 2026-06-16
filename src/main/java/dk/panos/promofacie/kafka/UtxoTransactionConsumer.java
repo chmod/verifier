@@ -18,14 +18,22 @@ public class UtxoTransactionConsumer {
     @Incoming("cardano-utxo-updates")
     public void consumeUtxo(UtxoTransactionPayload payload) {
         if (payload == null || payload.stakeAddress() == null) {
-            log.warn("Received null or incomplete UtxoTransactionPayload — skipping");
+            log.warn("[UtxoConsumer] Received null or incomplete UtxoTransactionPayload — skipping");
             return;
         }
-        log.info("Received UTXO update for stakeAddress: {}", payload.stakeAddress());
+        
+        log.info("[UtxoConsumer] Received UTXO update from Kafka: stakeAddress={} txHash={} createdUtxosCount={} spentUtxosCount={}", 
+                payload.stakeAddress(), 
+                payload.txHash(), 
+                payload.createdUtxos() != null ? payload.createdUtxos().size() : 0, 
+                payload.spentUtxos() != null ? payload.spentUtxos().size() : 0);
+
         try {
+            log.info("[UtxoConsumer] Invoking reactive role check for stakeAddress: {}", payload.stakeAddress());
             cardanoRoleService.checkAndUpdateRoles(payload.stakeAddress());
+            log.info("[UtxoConsumer] Successfully processed roles check for stakeAddress: {}", payload.stakeAddress());
         } catch (Exception e) {
-            log.error("Failed to reactively check roles for stakeAddress: {}", payload.stakeAddress(), e);
+            log.error("[UtxoConsumer] Failed to reactively check roles for stakeAddress: {}", payload.stakeAddress(), e);
         }
     }
 }

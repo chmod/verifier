@@ -74,6 +74,7 @@ public class WalletVerificationResource {
                     if (ex != null) {
                         log.error("Failed to send tracking command stakeAddress={}: {}", req.stakeAddress(), ex.getMessage(), ex);
                     } else {
+                        log.info("Successfully sent ADD_ADDRESS tracking command to Kafka for stakeAddress: {}", req.stakeAddress());
                         walletPersistenceService.persist(req.stakeAddress(), discordId);
                     }
                 });
