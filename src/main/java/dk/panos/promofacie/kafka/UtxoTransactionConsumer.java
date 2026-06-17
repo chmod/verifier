@@ -21,7 +21,7 @@ public class UtxoTransactionConsumer {
     @Incoming("cardano-utxo-updates")
     public void consumeUtxo(UtxoTransactionPayload payload) {
         if (payload == null || payload.stakeAddress() == null) {
-            log.warn("[UtxoConsumer] Received null or incomplete UtxoTransactionPayload — skipping");
+            log.warn("[UtxoConsumer] Received null or incomplete UtxoTransactionPayload — skipping {}", payload);
             return;
         }
         
