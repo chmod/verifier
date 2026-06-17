@@ -22,5 +22,7 @@ public record UtxoTransactionPayload(
         @JsonProperty("createdUtxos")
         List<UtxoEntry> createdUtxos,
         @JsonProperty("spentUtxos")
-        List<UtxoEntry> spentUtxos
+        List<UtxoEntry> spentUtxos,
+        @JsonProperty("snapshot")
+        boolean snapshot
 ) {}

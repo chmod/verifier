@@ -22,11 +22,12 @@ public class UtxoTransactionConsumer {
             return;
         }
         
-        log.info("[UtxoConsumer] Received UTXO update from Kafka: stakeAddress={} txHash={} createdUtxosCount={} spentUtxosCount={}", 
+        log.info("[UtxoConsumer] Received UTXO update from Kafka: stakeAddress={} txHash={} createdUtxosCount={} spentUtxosCount={} snapshot={}", 
                 payload.stakeAddress(), 
                 payload.txHash(), 
                 payload.createdUtxos() != null ? payload.createdUtxos().size() : 0, 
-                payload.spentUtxos() != null ? payload.spentUtxos().size() : 0);
+                payload.spentUtxos() != null ? payload.spentUtxos().size() : 0,
+                payload.snapshot());
 
         try {
             log.info("[UtxoConsumer] Invoking reactive role check for stakeAddress: {}", payload.stakeAddress());
