@@ -33,14 +33,26 @@ public class UtxoTransactionConsumer {
                 payload.snapshot());
 
         try {
-            if (payload.snapshot()) {
+            if ("rollback".equalsIgnoreCase(payload.txHash())) {
+                log.info("[UtxoConsumer] Rollback transaction detected for stakeAddress: {} with slot {}", 
+                        payload.stakeAddress(), payload.slot());
+                // TODO: Handle rollback inventory update locally (e.g. process rolled back spent/created UTXOs)
+                // TODO: Placeholder for role check:
+                // cardanoRoleService.checkAndUpdateRoles(payload.stakeAddress());
+                
+            } else if (payload.snapshot()) {
                 log.info("[UtxoConsumer] Snapshot detected — updating database inventory for stakeAddress: {}", payload.stakeAddress());
                 userAssetInventoryService.handleSnapshot(payload);
+                // TODO: Placeholder for role check:
+                // cardanoRoleService.checkAndUpdateRoles(payload.stakeAddress());
+                
+            } else {
+                log.info("[UtxoConsumer] Regular transaction detected for stakeAddress: {} (txHash={})", 
+                        payload.stakeAddress(), payload.txHash());
+                // TODO: Handle regular incremental transaction updates (created/spent UTXOs) locally
+                // TODO: Placeholder for role check:
+                // cardanoRoleService.checkAndUpdateRoles(payload.stakeAddress());
             }
-
-            log.info("[UtxoConsumer] Invoking reactive role check for stakeAddress: {}", payload.stakeAddress());
-//            cardanoRoleService.checkAndUpdateRoles(payload.stakeAddress());
-            log.info("[UtxoConsumer] Successfully processed roles check for stakeAddress: {}", payload.stakeAddress());
         } catch (Exception e) {
             log.error("[UtxoConsumer] Failed to process UTXO update for stakeAddress: {}", payload.stakeAddress(), e);
         }
