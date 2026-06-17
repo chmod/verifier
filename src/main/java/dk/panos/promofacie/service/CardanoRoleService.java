@@ -17,10 +17,13 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.StructuredTaskScope;
+import java.util.concurrent.ThreadFactory;
 import java.util.stream.Collectors;
 
 @ApplicationScoped
+
 public class CardanoRoleService {
 
     private static final org.slf4j.Logger log = LoggerFactory.getLogger(CardanoRoleService.class);
@@ -45,34 +48,22 @@ public class CardanoRoleService {
         Map<String, List<Wallet>> walletsByUser = wallets.stream()
                 .collect(Collectors.groupingBy(Wallet::getDiscordId));
 
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        ThreadFactory vthreadFactory = Thread.ofVirtual().name("cardano-role-worker-", 0).factory();
+
+        try (var scope = new StructuredTaskScope.ShutdownOnFailure("CardanoRoleComputation", vthreadFactory)) {
             for (Map.Entry<String, List<Wallet>> entry : walletsByUser.entrySet()) {
-                executor.submit(() -> {
+                scope.fork(() -> {
                     processUser(entry.getKey(), entry.getValue());
+                    return null;
                 });
             }
+            scope.join();
+            scope.throwIfFailed();
+        } catch (ExecutionException e) {
+            throw new RuntimeException("Failed processing Cardano wallets", e);
         }
 
         log.info("Cardano role updates complete.");
-    }
-
-    /**
-     * Reactively checks and updates roles for the user associated with the given stake address.
-     */
-    public void checkAndUpdateRoles(String stakeAddress) {
-        log.info("[ReactiveRoleCheck] Triggered for stakeAddress: {}", stakeAddress);
-        Wallet wallet = Wallet.find("address = :address and chain = :chain",
-                Parameters.with("address", stakeAddress).and("chain", Chain.CARDANO)).firstResult();
-        if (wallet == null) {
-            log.warn("[ReactiveRoleCheck] No wallet found in database for stakeAddress: {}", stakeAddress);
-            return;
-        }
-
-        // Find all wallets registered to this same user to evaluate total status
-        List<Wallet> userWallets = Wallet.list("discordId = :discordId and chain = :chain",
-                Parameters.with("discordId", wallet.getDiscordId()).and("chain", Chain.CARDANO));
-
-        processUser(wallet.getDiscordId(), userWallets);
     }
 
     private void processUser(String discordId, List<Wallet> wallets) {
