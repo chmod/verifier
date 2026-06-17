@@ -31,6 +31,9 @@ public class UtxoTransactionConsumer {
                 payload.createdUtxos() != null ? payload.createdUtxos().size() : 0, 
                 payload.spentUtxos() != null ? payload.spentUtxos().size() : 0,
                 payload.snapshot());
+        log.info("[UtxoConsumer] Details created={} spent={}",
+                payload.createdUtxos(),
+                payload.spentUtxos());
 
         try {
             if ("rollback".equalsIgnoreCase(payload.txHash())) {
