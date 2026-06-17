@@ -39,7 +39,7 @@ public class UtxoTransactionConsumer {
             }
 
             log.info("[UtxoConsumer] Invoking reactive role check for stakeAddress: {}", payload.stakeAddress());
-            cardanoRoleService.checkAndUpdateRoles(payload.stakeAddress());
+//            cardanoRoleService.checkAndUpdateRoles(payload.stakeAddress());
             log.info("[UtxoConsumer] Successfully processed roles check for stakeAddress: {}", payload.stakeAddress());
         } catch (Exception e) {
             log.error("[UtxoConsumer] Failed to process UTXO update for stakeAddress: {}", payload.stakeAddress(), e);
