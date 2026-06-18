@@ -14,6 +14,8 @@ import org.eclipse.microprofile.reactive.messaging.Incoming;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import jakarta.transaction.Transactional;
+
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -65,7 +67,8 @@ public class UtxoTransactionConsumer {
         }
     }
 
-    private void processSnapshotAndEvaluate(UtxoTransactionPayload payload) {
+    @Transactional
+    void processSnapshotAndEvaluate(UtxoTransactionPayload payload) {
         // 1. Fetch current (before) inventory from DB
         List<UserAssetInventory> beforeEntities = UserAssetInventory.list("id.stakeAddress = ?1", payload.stakeAddress());
         WalletInventorySnapshot before = entityMapper.map(beforeEntities);
