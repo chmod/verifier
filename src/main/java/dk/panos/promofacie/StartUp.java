@@ -36,7 +36,7 @@ public class StartUp {
             rule.guildId = targetGuild;
             rule.policyId = targetPolicy;
             rule.roleId = targetRoleId;
-            rule.minQuantity = 1;
+            rule.minQuantity = 1L;
             rule.persist();
 
             // Notify the Cardano indexer reactively to start tracking this policy ID

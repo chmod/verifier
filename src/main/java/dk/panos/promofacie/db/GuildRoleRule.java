@@ -23,7 +23,7 @@ public class GuildRoleRule extends PanacheEntity {
     public String policyId;
 
     @Column(name = "min_quantity", nullable = false)
-    public Integer minQuantity = 1;
+    public Long minQuantity = 1L;
 
     @OneToMany(mappedBy = "rule", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     public List<RuleTraitCriteria> criteria = new ArrayList<>();
