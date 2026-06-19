@@ -55,7 +55,7 @@ public class StartUp {
         String eikoTargetPolicy = "0a109e4c024759806827258f6e3f316fe94584ecd1f85eb18bbce0d9";
         String eikoTargetRoleId = "1517558406695620659";
         count = GuildRoleRule.count("guildId = ?1 and policyId = ?2 and roleId = ?3",
-                targetGuild, targetPolicy, targetRoleId);
+                eikoTargetRoleId, eikoTargetPolicy, targetRoleId);
 
         if (count == 0) {
             log.info("[StartUp] Creating new GuildRoleRule for guild={}, policy={}", targetGuild, eikoTargetPolicy);
