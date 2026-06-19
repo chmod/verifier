@@ -33,7 +33,7 @@ class RoleSyncSchedulerTest {
         // Group 1: user-1, guild-1
         List<Object[]> pendingGroups = new ArrayList<>();
         pendingGroups.add(new Object[]{"user-1", "guild-1"});
-        doReturn(pendingGroups).when(scheduler).getPendingGroups();
+        doReturn(pendingGroups).when(scheduler).getPendingGuildIds();
 
         RoleSyncOutbox task1 = new RoleSyncOutbox();
         task1.id = 1L;
@@ -99,7 +99,7 @@ class RoleSyncSchedulerTest {
 
         List<Object[]> pendingGroups = new ArrayList<>();
         pendingGroups.add(new Object[]{"user-1", "guild-1"});
-        doReturn(pendingGroups).when(scheduler).getPendingGroups();
+        doReturn(pendingGroups).when(scheduler).getPendingGuildIds();
 
         // Row has been overwritten to PRESENT by upsert
         RoleSyncOutbox task = new RoleSyncOutbox();
