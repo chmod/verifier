@@ -18,42 +18,60 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @ApplicationScoped
 public class RoleSyncScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(RoleSyncScheduler.class);
+    private static final int MAX_RETRY_COUNT = 5;
+    private static final long JDA_CALL_TIMEOUT_SECONDS = 30;
 
     @Inject
     JDA jda;
 
-    @Inject
-    RoleEvaluationService roleEvaluationService;
-
     @Scheduled(every = "15m", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     public void processOutboxQueue() {
-        List<Object[]> pendingGroups = getPendingGroups();
-        if (pendingGroups.isEmpty()) {
+        List<String> guildIds = getPendingGuildIds();
+        if (guildIds.isEmpty()) {
             return;
         }
 
-        log.info("[RoleSyncScheduler] Spawning virtual threads to process outbox queue for {} user-guild group(s)", pendingGroups.size());
+        // One virtual thread per GUILD, not per (user, guild). Discord's role-modification
+        // rate limits are bucketed per guild, so spawning a separate thread per user within
+        // the same guild doesn't parallelize anything real — they'd all queue behind the
+        // same guild bucket inside JDA anyway. Grouping by guild means each thread processes
+        // that guild's pending users sequentially internally, while different guilds (with
+        // independent rate-limit buckets) still run concurrently against each other.
+        log.info("[RoleSyncScheduler] Spawning virtual threads for {} guild(s) with pending outbox work", guildIds.size());
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            for (Object[] group : pendingGroups) {
-                String discordId = (String) group[0];
-                String guildId = (String) group[1];
-                executor.submit(() -> processUserGuildGroup(discordId, guildId));
+            for (String guildId : guildIds) {
+                executor.submit(() -> processGuild(guildId));
             }
         } catch (Exception e) {
-            log.error("[RoleSyncScheduler] Error executing virtual thread group processors", e);
+            log.error("[RoleSyncScheduler] Error executing virtual thread guild processors", e);
+        }
+    }
+
+    private void processGuild(String guildId) {
+        List<String> discordIds = getPendingDiscordIdsForGuild(guildId);
+        log.info("[RoleSyncScheduler] Processing {} user(s) with pending tasks in guild {}", discordIds.size(), guildId);
+
+        for (String discordId : discordIds) {
+            processUserGuildGroup(discordId, guildId);
         }
     }
 
     private void processUserGuildGroup(String discordId, String guildId) {
         log.info("[RoleSyncScheduler] Start processing group for user: {}, guild: {}", discordId, guildId);
         try {
-            // Acquire lock and mark tasks as PROCESSING in a short transaction
+            // Acquire lock and mark tasks as PROCESSING in a short transaction. This commits
+            // and releases the row lock before the JDA call below runs — we deliberately do
+            // not hold a DB lock across the blocking network call. Correctness past this
+            // point depends on the conditional, slot-guarded updates in
+            // markTasksDone/markTasksFailed/handleGroupFailure, not on any lock still held.
             List<RoleSyncOutbox> tasks = acquirePendingTasksWithLock(discordId, guildId);
             if (tasks.isEmpty()) {
                 log.info("[RoleSyncScheduler] Group for user: {}, guild: {} is already locked or has no pending tasks", discordId, guildId);
@@ -71,7 +89,7 @@ public class RoleSyncScheduler {
             Guild guild = jda.getGuildById(guildId);
             if (guild == null) {
                 log.warn("[RoleSyncScheduler] Guild {} not found for user {}", guildId, discordId);
-                markTasksFailed(tasks);
+                markTasksFailed(tasks, "guild not found");
                 return;
             }
 
@@ -80,19 +98,24 @@ public class RoleSyncScheduler {
                 try {
                     member = guild.retrieveMemberById(discordId).complete();
                 } catch (Exception e) {
-                    log.warn("[RoleSyncScheduler] Member {} not found in guild {} — marking tasks as failed", discordId, guildId);
-                    markTasksFailed(tasks);
+                    // Member may genuinely have left, or this may be transient gateway lag.
+                    // Route through the retry path rather than an immediate terminal failure.
+                    log.warn("[RoleSyncScheduler] Member {} not found in guild {} — routing to retry", discordId, guildId);
+                    handleGroupFailure(tasks, "member not found: " + e.getMessage());
                     return;
                 }
             }
 
             List<Role> rolesToAdd = new ArrayList<>();
             List<Role> rolesToRemove = new ArrayList<>();
+            List<RoleSyncOutbox> appliedTasks = new ArrayList<>();
+            List<RoleSyncOutbox> unresolvedRoleTasks = new ArrayList<>();
 
             for (RoleSyncOutbox task : tasks) {
                 Role role = guild.getRoleById(task.roleId);
                 if (role == null) {
-                    log.warn("[RoleSyncScheduler] Role {} not found in guild {} — skipping task {}", task.roleId, guildId, task.id);
+                    log.warn("[RoleSyncScheduler] Role {} not found in guild {} — task {} routed to retry", task.roleId, guildId, task.id);
+                    unresolvedRoleTasks.add(task);
                     continue;
                 }
                 if (task.targetState == TargetState.PRESENT) {
@@ -100,37 +123,63 @@ public class RoleSyncScheduler {
                 } else {
                     rolesToRemove.add(role);
                 }
+                appliedTasks.add(task);
             }
 
-            log.info("[RoleSyncScheduler] Executing JDA batch modify roles for user {} in guild {}: adding {}, removing {}", 
-                    discordId, guildId, rolesToAdd.size(), rolesToRemove.size());
-            
-            guild.modifyMemberRoles(member, rolesToAdd, rolesToRemove).submit().get();
+            // Tasks whose role couldn't be resolved get an explicit outcome (retry budget,
+            // same as any other failure) instead of being silently dropped from every status.
+            if (!unresolvedRoleTasks.isEmpty()) {
+                handleGroupFailure(unresolvedRoleTasks, "role not found in guild");
+            }
 
-            // Success path: mark tasks as DONE
-            markTasksDone(tasks);
+            if (appliedTasks.isEmpty()) {
+                log.info("[RoleSyncScheduler] No resolvable role tasks for user {} in guild {}", discordId, guildId);
+                return;
+            }
+
+            log.info("[RoleSyncScheduler] Executing JDA batch modify roles for user {} in guild {}: adding {}, removing {}",
+                    discordId, guildId, rolesToAdd.size(), rolesToRemove.size());
+
+            guild.modifyMemberRoles(member, rolesToAdd, rolesToRemove)
+                    .submit()
+                    .get(JDA_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+            // Success path: mark only the tasks actually applied as DONE — conditionally,
+            // so any task superseded by a newer enqueue mid-flight is left untouched.
+            markTasksDone(appliedTasks);
             log.info("[RoleSyncScheduler] Successfully processed roles for user {} in guild {}", discordId, guildId);
 
+        } catch (TimeoutException e) {
+            log.error("[RoleSyncScheduler] JDA call timed out after {}s for user {} in guild {}", JDA_CALL_TIMEOUT_SECONDS, discordId, guildId, e);
+            handleGroupFailure(tasks, "JDA call timed out");
         } catch (Exception e) {
             log.error("[RoleSyncScheduler] JDA execution failed for user {} in guild {}", discordId, guildId, e);
-            handleGroupFailure(tasks);
+            handleGroupFailure(tasks, e.getMessage());
         }
     }
 
     @Transactional
-    public List<Object[]> getPendingGroups() {
+    public List<String> getPendingGuildIds() {
         return RoleSyncOutbox.getEntityManager()
-                .createQuery("select distinct o.discordId, o.guildId from RoleSyncOutbox o where o.status = 'PENDING'", Object[].class)
+                .createQuery("select distinct o.guildId from RoleSyncOutbox o where o.status = 'PENDING'", String.class)
+                .getResultList();
+    }
+
+    @Transactional
+    public List<String> getPendingDiscordIdsForGuild(String guildId) {
+        return RoleSyncOutbox.getEntityManager()
+                .createQuery("select distinct o.discordId from RoleSyncOutbox o where o.guildId = ?1 and o.status = 'PENDING'", String.class)
+                .setParameter(1, guildId)
                 .getResultList();
     }
 
     @Transactional
     public List<RoleSyncOutbox> acquirePendingTasksWithLock(String discordId, String guildId) {
-        List<RoleSyncOutbox> tasks = RoleSyncOutbox.find("discordId = ?1 and guildId = ?2 and status = 'PENDING'", discordId, guildId)
+        List<RoleSyncOutbox> tasks = RoleSyncOutbox.find("discordId = ?1 and guildId = ?2 and status = ?3", discordId, guildId, "PENDING")
                 .withLock(LockModeType.PESSIMISTIC_WRITE)
                 .withHint("jakarta.persistence.lock.timeout", -2) // SKIP LOCKED
                 .list();
-        
+
         for (RoleSyncOutbox task : tasks) {
             task.status = "PROCESSING";
             task.updatedAt = Instant.now();
@@ -139,44 +188,73 @@ public class RoleSyncScheduler {
         return tasks;
     }
 
+    /**
+     * Marks tasks DONE, but only if the row's eventSlot still matches what was executed
+     * against and its status is still PROCESSING. If a newer enqueue has superseded the row
+     * in the meantime, this is a deliberate no-op — the row already reflects newer desired
+     * state and must be left for the next scheduler tick to pick up and apply correctly.
+     */
     @Transactional
     public void markTasksDone(List<RoleSyncOutbox> tasks) {
         for (RoleSyncOutbox task : tasks) {
-            RoleSyncOutbox managedTask = RoleSyncOutbox.findById(task.id);
-            if (managedTask != null) {
-                managedTask.status = "DONE";
-                managedTask.updatedAt = Instant.now();
-                managedTask.persist();
+            long updated = RoleSyncOutbox.update(
+                    "status = 'DONE', updatedAt = ?1 where id = ?2 and eventSlot = ?3 and status = 'PROCESSING'",
+                    Instant.now(), task.id, task.eventSlot
+            );
+            if (updated == 0) {
+                log.info("[RoleSyncScheduler] Task {} was superseded during execution — leaving as-is for re-pick", task.id);
             }
         }
     }
 
+    /**
+     * Terminal failure (no further retry). Same supersede-guard as markTasksDone.
+     */
     @Transactional
-    public void markTasksFailed(List<RoleSyncOutbox> tasks) {
+    public void markTasksFailed(List<RoleSyncOutbox> tasks, String reason) {
         for (RoleSyncOutbox task : tasks) {
-            RoleSyncOutbox managedTask = RoleSyncOutbox.findById(task.id);
-            if (managedTask != null) {
+            long updated = RoleSyncOutbox.update(
+                    "status = 'FAILED', updatedAt = ?1 where id = ?2 and eventSlot = ?3 and status = 'PROCESSING'",
+                    Instant.now(), task.id, task.eventSlot
+            );
+            if (updated == 0) {
+                log.info("[RoleSyncScheduler] Task {} was superseded before failure could be recorded — leaving as-is for re-pick", task.id);
+            } else {
+                log.warn("[RoleSyncScheduler] Task {} marked FAILED (terminal): {}", task.id, reason);
+            }
+        }
+    }
+
+    /**
+     * Failure with retry: increments retryCount and either requeues as PENDING or marks
+     * FAILED once the retry budget is exhausted. Only acts on rows still in the state we
+     * expect (PROCESSING, same eventSlot we executed against) — a superseded row is left
+     * alone since it's already PENDING with newer intent.
+     */
+    @Transactional
+    public void handleGroupFailure(List<RoleSyncOutbox> tasks, String reason) {
+        for (RoleSyncOutbox task : tasks) {
+            RoleSyncOutbox managedTask = RoleSyncOutbox.find(
+                    "id = ?1 and eventSlot = ?2 and status = 'PROCESSING'", task.id, task.eventSlot
+            ).firstResult();
+
+            if (managedTask == null) {
+                log.info("[RoleSyncScheduler] Task {} was superseded during failure handling — leaving as-is for re-pick", task.id);
+                continue;
+            }
+
+            managedTask.retryCount++;
+            if (managedTask.retryCount >= MAX_RETRY_COUNT) {
                 managedTask.status = "FAILED";
-                managedTask.updatedAt = Instant.now();
-                managedTask.persist();
+                log.warn("[RoleSyncScheduler] Task {} exhausted retry budget ({}) — marking FAILED. Reason: {}",
+                        managedTask.id, MAX_RETRY_COUNT, reason);
+            } else {
+                managedTask.status = "PENDING";
+                log.info("[RoleSyncScheduler] Task {} requeued (attempt {}/{}). Reason: {}",
+                        managedTask.id, managedTask.retryCount, MAX_RETRY_COUNT, reason);
             }
-        }
-    }
-
-    @Transactional
-    public void handleGroupFailure(List<RoleSyncOutbox> tasks) {
-        for (RoleSyncOutbox task : tasks) {
-            RoleSyncOutbox managedTask = RoleSyncOutbox.findById(task.id);
-            if (managedTask != null) {
-                managedTask.retryCount++;
-                if (managedTask.retryCount >= 5) {
-                    managedTask.status = "FAILED";
-                } else {
-                    managedTask.status = "PENDING"; // Return to queue
-                }
-                managedTask.updatedAt = Instant.now();
-                managedTask.persist();
-            }
+            managedTask.updatedAt = Instant.now();
+            managedTask.persist();
         }
     }
 }

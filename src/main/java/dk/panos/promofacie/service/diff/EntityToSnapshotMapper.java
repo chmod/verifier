@@ -1,5 +1,6 @@
 package dk.panos.promofacie.service.diff;
 
+import dk.panos.promofacie.db.InventoryRow;
 import dk.panos.promofacie.db.UserAssetInventory;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
@@ -24,4 +25,14 @@ public interface EntityToSnapshotMapper {
     @Mapping(target = "quantity", source = "quantity")
     @Mapping(target = "traits", source = "traits")
     AssetHolding mapEntity(UserAssetInventory entity);
+
+    default WalletInventorySnapshot mapRows(List<InventoryRow> rows) {
+        if (rows == null) {
+            return new WalletInventorySnapshot(List.of());
+        }
+        List<AssetHolding> holdings = rows.stream()
+                .map(r -> new AssetHolding(r.policyId(), r.assetNameHex(), r.quantity(), r.traits()))
+                .toList();
+        return new WalletInventorySnapshot(holdings);
+    }
 }
