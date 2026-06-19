@@ -4,13 +4,10 @@ import dk.panos.promofacie.db.GuildRoleRule;
 import dk.panos.promofacie.db.RuleTraitCriteria;
 import dk.panos.promofacie.db.UserAssetInventory;
 import dk.panos.promofacie.db.Wallet;
+import dk.panos.promofacie.db.RoleSyncOutbox;
+import dk.panos.promofacie.db.TargetState;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
-import net.dv8tion.jda.api.JDA;
-import net.dv8tion.jda.api.entities.Guild;
-import net.dv8tion.jda.api.entities.Member;
-import net.dv8tion.jda.api.entities.Role;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,106 +19,85 @@ public class RoleEvaluationService {
 
     private static final Logger log = LoggerFactory.getLogger(RoleEvaluationService.class);
 
-    private final JDA jda;
-
-    @Inject
-    public RoleEvaluationService(JDA jda) {
-        this.jda = jda;
-    }
-
+    /**
+     * Upserts desired-state outbox rows keyed on (discord_id, guild_id, role_id). Requires
+     * a matching unique constraint on that triple in the schema — ON CONFLICT will throw at
+     * runtime otherwise. The event_slot CASE guard ensures an out-of-order/late-arriving
+     * evaluation for an older slot can never clobber a row already updated by a newer one.
+     */
     @Transactional
-    public void evaluateRoles(String stakeAddress, Set<String> changedPolicies) {
+    public void enqueueRoleUpdates(String stakeAddress, Set<String> changedPolicies, long eventSlot) {
         if (changedPolicies == null || changedPolicies.isEmpty()) {
             return;
         }
 
         Wallet wallet = Wallet.find("address = ?1", stakeAddress).firstResult();
         if (wallet == null) {
-            log.warn("[RoleEvaluation] Stake address {} is not linked to any user — skipping role check", stakeAddress);
+            log.warn("[RoleEvaluation] Stake address {} is not linked to any user — skipping outbox enqueue", stakeAddress);
             return;
         }
 
         String discordId = wallet.getDiscordId();
-        log.info("[RoleEvaluation] Evaluating roles for user {} due to changes in policies: {}", discordId, changedPolicies);
+        log.info("[RoleEvaluation] Enqueuing role updates for user {} (slot: {}) due to changed policies: {}",
+                discordId, eventSlot, changedPolicies);
 
-        // Fetch all wallets for the user
         List<Wallet> userWallets = Wallet.list("discordId = ?1", discordId);
         List<String> walletAddresses = userWallets.stream().map(Wallet::getAddress).toList();
 
-        // Fetch rules matching the changed policies
         List<GuildRoleRule> rules = GuildRoleRule.list("policyId in ?1", changedPolicies);
         log.info("[RoleEvaluation] Found {} rule(s) matching changed policies for user {}", rules.size(), discordId);
 
         for (GuildRoleRule rule : rules) {
-            evaluateRuleForUser(discordId, walletAddresses, rule);
+            boolean meetsRule = evaluateRuleCompliance(walletAddresses, rule);
+            TargetState targetState = meetsRule ? TargetState.PRESENT : TargetState.ABSENT;
+
+            RoleSyncOutbox.getEntityManager().createNativeQuery(
+                            "INSERT INTO role_sync_outbox (discord_id, guild_id, role_id, target_state, status, event_slot, retry_count, created_at, updated_at) " +
+                                    "VALUES (:discordId, :guildId, :roleId, :targetState, 'PENDING', :eventSlot, 0, now(), now()) " +
+                                    "ON CONFLICT (discord_id, guild_id, role_id) " +
+                                    "DO UPDATE SET " +
+                                    "    target_state = CASE WHEN :eventSlot > role_sync_outbox.event_slot THEN EXCLUDED.target_state ELSE role_sync_outbox.target_state END, " +
+                                    "    status = CASE WHEN :eventSlot > role_sync_outbox.event_slot THEN 'PENDING' ELSE role_sync_outbox.status END, " +
+                                    "    retry_count = CASE WHEN :eventSlot > role_sync_outbox.event_slot THEN 0 ELSE role_sync_outbox.retry_count END, " +
+                                    "    event_slot = CASE WHEN :eventSlot > role_sync_outbox.event_slot THEN EXCLUDED.event_slot ELSE role_sync_outbox.event_slot END, " +
+                                    "    updated_at = now()"
+                    )
+                    .setParameter("discordId", discordId)
+                    .setParameter("guildId", rule.guildId)
+                    .setParameter("roleId", rule.roleId)
+                    .setParameter("targetState", targetState.name())
+                    .setParameter("eventSlot", eventSlot)
+                    .executeUpdate();
+
+            log.info("[RoleEvaluation] Upserted desired-state task to target_state={} for user={} guild={} role={} (slot={})",
+                    targetState, discordId, rule.guildId, rule.roleId, eventSlot);
         }
     }
 
-    private void evaluateRuleForUser(String discordId, List<String> walletAddresses, GuildRoleRule rule) {
-        try {
-            // Fetch all assets of this policy ID for the user's wallets
-            List<UserAssetInventory> inventoryItems = UserAssetInventory.list(
-                    "id.stakeAddress in ?1 and id.policyId = ?2",
-                    walletAddresses,
-                    rule.policyId
-            );
+    private boolean evaluateRuleCompliance(List<String> walletAddresses, GuildRoleRule rule) {
+        List<UserAssetInventory> inventoryItems = UserAssetInventory.list(
+                "id.stakeAddress in ?1 and id.policyId = ?2",
+                walletAddresses,
+                rule.policyId
+        );
 
-            long matchingQuantity = 0;
-            for (UserAssetInventory item : inventoryItems) {
-                boolean matchesAllCriteria = true;
-                if (rule.criteria != null) {
-                    for (RuleTraitCriteria criterion : rule.criteria) {
-                        String traitValue = item.traits != null ? item.traits.get(criterion.traitKey) : null;
-                        if (traitValue == null || !traitValue.equalsIgnoreCase(criterion.traitValue)) {
-                            matchesAllCriteria = false;
-                            break;
-                        }
+        long matchingQuantity = 0;
+        for (UserAssetInventory item : inventoryItems) {
+            boolean matchesAllCriteria = true;
+            if (rule.criteria != null) {
+                for (RuleTraitCriteria criterion : rule.criteria) {
+                    String traitValue = item.traits != null ? item.traits.get(criterion.traitKey) : null;
+                    if (traitValue == null || !traitValue.equalsIgnoreCase(criterion.traitValue)) {
+                        matchesAllCriteria = false;
+                        break;
                     }
                 }
-                if (matchesAllCriteria) {
-                    matchingQuantity += item.quantity;
-                }
             }
-
-            boolean meetsRule = matchingQuantity >= rule.minQuantity;
-            log.info("[RoleEvaluation] User {} has matching quantity {} for policy {} (required: {})", 
-                    discordId, matchingQuantity, rule.policyId, rule.minQuantity);
-
-            Guild guild = jda.getGuildById(rule.guildId);
-            if (guild == null) {
-                log.warn("[RoleEvaluation] Guild {} not found for rule {}", rule.guildId, rule.id);
-                return;
+            if (matchesAllCriteria) {
+                matchingQuantity += item.quantity;
             }
-
-            Member member = guild.getMemberById(discordId);
-            if (member == null) {
-                log.debug("[RoleEvaluation] Member {} not found in guild {}", discordId, rule.guildId);
-                return;
-            }
-
-            Role role = guild.getRoleById(rule.roleId);
-            if (role == null) {
-                log.warn("[RoleEvaluation] Role {} not found in guild {}", rule.roleId, rule.guildId);
-                return;
-            }
-
-            boolean hasRole = member.getRoles().contains(role);
-
-            if (meetsRule && !hasRole) {
-                log.info("[RoleEvaluation] Adding role {} to user {} in guild {}", rule.roleId, discordId, rule.guildId);
-                guild.addRoleToMember(member, role).queue(
-                        success -> log.info("[RoleEvaluation] Successfully added role {} to user {}", rule.roleId, discordId),
-                        failure -> log.error("[RoleEvaluation] Failed to add role {} to user {}", rule.roleId, discordId, failure)
-                );
-            } else if (!meetsRule && hasRole) {
-                log.info("[RoleEvaluation] Removing role {} from user {} in guild {}", rule.roleId, discordId, rule.guildId);
-                guild.removeRoleFromMember(member, role).queue(
-                        success -> log.info("[RoleEvaluation] Successfully removed role {} from user {}", rule.roleId, discordId),
-                        failure -> log.error("[RoleEvaluation] Failed to remove role {} from user {}", rule.roleId, discordId, failure)
-                );
-            }
-        } catch (Exception e) {
-            log.error("[RoleEvaluation] Failed to evaluate rule {} for user {}", rule.id, discordId, e);
         }
+
+        return matchingQuantity >= rule.minQuantity;
     }
 }
