@@ -129,6 +129,10 @@ public class UtxoTransactionConsumer {
             changedPolicies.add(h.policyId());
         }
 
+        for (UserAssetInventory entity : lockedBeforeEntities) {
+            UserAssetInventory.getEntityManager().detach(entity);
+        }
+
         // 5. Update database inventory. Runs in this same transaction (TxType.REQUIRED),
         // so it's covered by the pessimistic lock acquired above.
         userAssetInventoryService.handleSnapshot(payload);

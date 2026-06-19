@@ -33,7 +33,7 @@ public class UserAssetInventoryService {
 
         // Delete existing inventory for this stake address
         UserAssetInventory.delete("id.stakeAddress = ?1", stakeAddress);
-
+        UserAssetInventory.getEntityManager().clear();
         if (payload.createdUtxos() == null || payload.createdUtxos().isEmpty()) {
             log.info("[Inventory] Snapshot is empty for stakeAddress: {}", stakeAddress);
             return;
