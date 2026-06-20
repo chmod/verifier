@@ -58,10 +58,10 @@ public class RoleEvaluationService {
                                     "VALUES (:discordId, :guildId, :roleId, :targetState, 'PENDING', :eventSlot, 0, now(), now()) " +
                                      "ON CONFLICT (discord_id, guild_id, role_id) " +
                                     "DO UPDATE SET " +
-                                    "    target_state = CASE WHEN :eventSlot > role_sync_outbox.event_slot THEN EXCLUDED.target_state ELSE role_sync_outbox.target_state END, " +
-                                    "    status = CASE WHEN :eventSlot > role_sync_outbox.event_slot THEN 'PENDING' ELSE role_sync_outbox.status END, " +
-                                    "    retry_count = CASE WHEN :eventSlot > role_sync_outbox.event_slot THEN 0 ELSE role_sync_outbox.retry_count END, " +
-                                    "    event_slot = CASE WHEN :eventSlot > role_sync_outbox.event_slot THEN EXCLUDED.event_slot ELSE role_sync_outbox.event_slot END, " +
+                                    "    target_state = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN EXCLUDED.target_state ELSE role_sync_outbox.target_state END, " +
+                                    "    status = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN 'PENDING' ELSE role_sync_outbox.status END, " +
+                                    "    retry_count = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN 0 ELSE role_sync_outbox.retry_count END, " +
+                                    "    event_slot = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN EXCLUDED.event_slot ELSE role_sync_outbox.event_slot END, " +
                                     "    updated_at = now()"
                     )
                     .setParameter("discordId", discordId)
