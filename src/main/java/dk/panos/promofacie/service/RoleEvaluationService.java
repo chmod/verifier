@@ -81,6 +81,7 @@ public class RoleEvaluationService {
                 targetState, discordId, guildId, roleId, eventSlot);
     }
 
+    @Transactional
     public boolean evaluateRuleCompliance(String discordId, List<String> walletAddresses, GuildRoleRule rule) {
         if (walletAddresses == null || walletAddresses.isEmpty()) {
             log.info("[RoleEvaluation]   User {} has no linked wallets - evaluation compliance = false", discordId);
