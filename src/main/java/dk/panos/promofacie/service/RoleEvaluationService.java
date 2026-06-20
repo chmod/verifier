@@ -48,13 +48,15 @@ public class RoleEvaluationService {
         log.info("[RoleEvaluation] Found {} rule(s) matching changed policies for user {}", rules.size(), discordId);
 
         for (GuildRoleRule rule : rules) {
-            boolean meetsRule = evaluateRuleCompliance(walletAddresses, rule);
+            log.info("[RoleEvaluation] Evaluating compliance for user {} in guild {} for role {} [policyId={}, minQuantity={}]",
+                    discordId, rule.guildId, rule.roleId, rule.policyId, rule.minQuantity);
+            boolean meetsRule = evaluateRuleCompliance(discordId, walletAddresses, rule);
             TargetState targetState = meetsRule ? TargetState.PRESENT : TargetState.ABSENT;
 
             RoleSyncOutbox.getEntityManager().createNativeQuery(
                             "INSERT INTO role_sync_outbox (discord_id, guild_id, role_id, target_state, status, event_slot, retry_count, created_at, updated_at) " +
                                     "VALUES (:discordId, :guildId, :roleId, :targetState, 'PENDING', :eventSlot, 0, now(), now()) " +
-                                    "ON CONFLICT (discord_id, guild_id, role_id) " +
+                                     "ON CONFLICT (discord_id, guild_id, role_id) " +
                                     "DO UPDATE SET " +
                                     "    target_state = CASE WHEN :eventSlot > role_sync_outbox.event_slot THEN EXCLUDED.target_state ELSE role_sync_outbox.target_state END, " +
                                     "    status = CASE WHEN :eventSlot > role_sync_outbox.event_slot THEN 'PENDING' ELSE role_sync_outbox.status END, " +
@@ -74,30 +76,40 @@ public class RoleEvaluationService {
         }
     }
 
-    private boolean evaluateRuleCompliance(List<String> walletAddresses, GuildRoleRule rule) {
+    private boolean evaluateRuleCompliance(String discordId, List<String> walletAddresses, GuildRoleRule rule) {
         List<UserAssetInventory> inventoryItems = UserAssetInventory.list(
                 "id.stakeAddress in ?1 and id.policyId = ?2",
                 walletAddresses,
                 rule.policyId
         );
 
+        log.info("[RoleEvaluation]   User {} has {} inventory items matching policyId {}",
+                discordId, inventoryItems.size(), rule.policyId);
+
         long matchingQuantity = 0;
         for (UserAssetInventory item : inventoryItems) {
             boolean matchesAllCriteria = true;
-            if (rule.criteria != null) {
+            if (rule.criteria != null && !rule.criteria.isEmpty()) {
                 for (RuleTraitCriteria criterion : rule.criteria) {
                     String traitValue = item.traits != null ? item.traits.get(criterion.traitKey) : null;
                     if (traitValue == null || !traitValue.equalsIgnoreCase(criterion.traitValue)) {
                         matchesAllCriteria = false;
+                        log.info("[RoleEvaluation]     Item policy={}, asset={}, qty={} FAILED trait criteria: expected {}={}, found {}",
+                                item.id.policyId, item.id.assetNameHex, item.quantity, criterion.traitKey, criterion.traitValue, traitValue);
                         break;
                     }
                 }
             }
             if (matchesAllCriteria) {
                 matchingQuantity += item.quantity;
+                log.info("[RoleEvaluation]     Item policy={}, asset={}, qty={} PASSED criteria. Current total={}",
+                        item.id.policyId, item.id.assetNameHex, item.quantity, matchingQuantity);
             }
         }
 
-        return matchingQuantity >= rule.minQuantity;
+        boolean result = matchingQuantity >= rule.minQuantity;
+        log.info("[RoleEvaluation]   Evaluation Result for user {} / policy {}: matchingQty={} (required={}) -> meetsRule={}",
+                discordId, rule.policyId, matchingQuantity, rule.minQuantity, result);
+        return result;
     }
 }

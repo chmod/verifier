@@ -92,32 +92,62 @@ public class UtxoTransactionConsumer {
                 .getResultList();
         WalletInventorySnapshot before = entityMapper.mapRows(beforeRows);
 
+        log.info("[UtxoConsumer] DB state before processing for stakeAddress {} contains {} asset holdings.",
+                payload.stakeAddress(), beforeRows.size());
+        if (log.isDebugEnabled()) {
+            for (InventoryRow row : beforeRows) {
+                log.debug("[UtxoConsumer]   Before asset: policy={}, assetName={}, qty={}, slot={}",
+                        row.policyId(), row.assetNameHex(), row.quantity(), row.lastUpdatedSlot());
+            }
+        }
+
         // Derive currentSlot directly in-memory from beforeRows
         Long currentSlot = beforeRows.isEmpty()
                 ? null
                 : beforeRows.stream().mapToLong(InventoryRow::lastUpdatedSlot).max().stream().boxed().findFirst().orElse(null);
 
+        log.info("[UtxoConsumer] Checking slot monotonicity for stakeAddress {}: payload slot = {}, current DB max slot = {}, forcedSync = {}",
+                payload.stakeAddress(), payload.slot(), currentSlot, payload.forcedSync());
+
         if (!isRollback && !payload.forcedSync()) {
             if (currentSlot != null && payload.slot() <= currentSlot) {
-                log.info("[UtxoConsumer] Incoming snapshot slot {} is not newer than current database slot {} for stakeAddress {} — skipping update",
+                log.warn("[UtxoConsumer] Monotonicity check failed! Incoming snapshot slot {} is not newer than current database slot {} for stakeAddress {} — skipping update",
                         payload.slot(), currentSlot, payload.stakeAddress());
                 return;
             }
         }
 
         if (payload.forcedSync()) {
-            log.info("[UtxoConsumer] Forced sync for stakeAddress {} at slot {} — bypassing monotonicity check",
+            log.info("[UtxoConsumer] Forced sync flag active for stakeAddress {} at slot {} — bypassing monotonicity checks",
                     payload.stakeAddress(), payload.slot());
         }
 
         long resolvedSlot = currentSlot != null ? Math.max(payload.slot(), currentSlot) : payload.slot();
+        log.info("[UtxoConsumer] resolvedSlot clamped to {} (payload slot: {}, current database slot: {}) for stakeAddress {}",
+                resolvedSlot, payload.slot(), currentSlot, payload.stakeAddress());
 
         // 2. Map incoming payload (after)
         WalletInventorySnapshot after = payloadMapper.map(payload);
+        log.info("[UtxoConsumer] Mapped incoming payload for stakeAddress {} contains {} asset holdings.",
+                payload.stakeAddress(), after.holdings().size());
 
         // 3. Diff snapshots
         DiffResult diff = before.diff(after);
-        log.info("[UtxoConsumer] Diff result: {} added, {} removed for stakeAddress {}", diff.added().size(), diff.removed().size(), payload.stakeAddress());
+        log.info("[UtxoConsumer] Diff result for stakeAddress {}: {} added, {} removed.",
+                payload.stakeAddress(), diff.added().size(), diff.removed().size());
+
+        if (!diff.added().isEmpty()) {
+            for (AssetHolding h : diff.added()) {
+                log.info("[UtxoConsumer]   Asset ADDED: policy={}, assetName={}, qty={}, traits={}",
+                        h.policyId(), h.assetNameHex(), h.quantity(), h.traits());
+            }
+        }
+        if (!diff.removed().isEmpty()) {
+            for (AssetHolding h : diff.removed()) {
+                log.info("[UtxoConsumer]   Asset REMOVED: policy={}, assetName={}, qty={}, traits={}",
+                        h.policyId(), h.assetNameHex(), h.quantity(), h.traits());
+            }
+        }
 
         // 4. Extract changed policies
         Set<String> changedPolicies = new HashSet<>();
@@ -136,7 +166,8 @@ public class UtxoTransactionConsumer {
             log.info("[UtxoConsumer] Policy changes detected: {}. Enqueuing outbox role updates.", changedPolicies);
             roleEvaluationService.enqueueRoleUpdates(payload.stakeAddress(), changedPolicies, resolvedSlot);
         } else {
-            log.info("[UtxoConsumer] No policy changes detected. Skipping outbox role updates.");
+            log.info("[UtxoConsumer] No policy changes detected for stakeAddress {}. Skipping outbox role updates.",
+                    payload.stakeAddress());
         }
     }
 }

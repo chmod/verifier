@@ -65,7 +65,6 @@ public class RoleSyncScheduler {
     }
 
     private void processUserGuildGroup(String discordId, String guildId) {
-        log.info("[RoleSyncScheduler] Start processing group for user: {}, guild: {}", discordId, guildId);
         try {
             // Acquire lock and mark tasks as PROCESSING in a short transaction. This commits
             // and releases the row lock before the JDA call below runs — we deliberately do
@@ -74,8 +73,15 @@ public class RoleSyncScheduler {
             // markTasksDone/markTasksFailed/handleGroupFailure, not on any lock still held.
             List<RoleSyncOutbox> tasks = acquirePendingTasksWithLock(discordId, guildId);
             if (tasks.isEmpty()) {
-                log.info("[RoleSyncScheduler] Group for user: {}, guild: {} is already locked or has no pending tasks", discordId, guildId);
+                log.info("[RoleSyncScheduler] Group for user: {}, guild: {} has no pending tasks or is already locked.", discordId, guildId);
                 return;
+            }
+
+            log.info("[RoleSyncScheduler] Start processing group for user: {}, guild: {}. Acquired {} task(s).",
+                    discordId, guildId, tasks.size());
+            for (RoleSyncOutbox task : tasks) {
+                log.info("[RoleSyncScheduler]   Acquired Outbox Task: id={}, roleId={}, targetState={}, eventSlot={}, retryCount={}",
+                        task.id, task.roleId, task.targetState, task.eventSlot, task.retryCount);
             }
 
             executeGroupBatch(discordId, guildId, tasks);
@@ -88,19 +94,22 @@ public class RoleSyncScheduler {
         try {
             Guild guild = jda.getGuildById(guildId);
             if (guild == null) {
-                log.warn("[RoleSyncScheduler] Guild {} not found for user {}", guildId, discordId);
+                log.warn("[RoleSyncScheduler] Guild {} not found in JDA cache for user {}", guildId, discordId);
                 markTasksFailed(tasks, "guild not found");
                 return;
             }
 
             Member member = guild.getMemberById(discordId);
             if (member == null) {
+                log.info("[RoleSyncScheduler] Member {} not in JDA cache for guild {}. Retrieving from API...", discordId, guildId);
                 try {
                     member = guild.retrieveMemberById(discordId).complete();
+                    log.info("[RoleSyncScheduler] Member {} successfully retrieved from Discord API for guild {}", discordId, guildId);
                 } catch (Exception e) {
                     // Member may genuinely have left, or this may be transient gateway lag.
                     // Route through the retry path rather than an immediate terminal failure.
-                    log.warn("[RoleSyncScheduler] Member {} not found in guild {} — routing to retry", discordId, guildId);
+                    log.warn("[RoleSyncScheduler] Member {} retrieve from Discord API failed in guild {} — routing to retry. Reason: {}",
+                            discordId, guildId, e.getMessage());
                     handleGroupFailure(tasks, "member not found: " + e.getMessage());
                     return;
                 }
@@ -129,16 +138,24 @@ public class RoleSyncScheduler {
             // Tasks whose role couldn't be resolved get an explicit outcome (retry budget,
             // same as any other failure) instead of being silently dropped from every status.
             if (!unresolvedRoleTasks.isEmpty()) {
+                log.info("[RoleSyncScheduler] Handling {} unresolved role task(s) for user {} in guild {}",
+                        unresolvedRoleTasks.size(), discordId, guildId);
                 handleGroupFailure(unresolvedRoleTasks, "role not found in guild");
             }
 
             if (appliedTasks.isEmpty()) {
-                log.info("[RoleSyncScheduler] No resolvable role tasks for user {} in guild {}", discordId, guildId);
+                log.info("[RoleSyncScheduler] No resolvable role tasks left for user {} in guild {}", discordId, guildId);
                 return;
             }
 
-            log.info("[RoleSyncScheduler] Executing JDA batch modify roles for user {} in guild {}: adding {}, removing {}",
+            log.info("[RoleSyncScheduler] Executing JDA batch modify roles for user {} in guild {}: adding {} role(s), removing {} role(s)",
                     discordId, guildId, rolesToAdd.size(), rolesToRemove.size());
+            for (Role r : rolesToAdd) {
+                log.info("[RoleSyncScheduler]   Role to ADD: {} (id={})", r.getName(), r.getId());
+            }
+            for (Role r : rolesToRemove) {
+                log.info("[RoleSyncScheduler]   Role to REMOVE: {} (id={})", r.getName(), r.getId());
+            }
 
             guild.modifyMemberRoles(member, rolesToAdd, rolesToRemove)
                     .submit()
