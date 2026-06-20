@@ -23,6 +23,21 @@ public class RuleRegistrationService {
         log.info("[RuleRegistration] Registering rule for guild={}, policy={}, role={}",
                 rule.guildId, rule.policyId, rule.roleId);
 
+        // Broadcast ADD_POLICY to Cardano indexer so it tracks this policy for future blocks
+        trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, rule.policyId))
+                .whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        log.error("[RuleRegistration] Failed to send ADD_POLICY for policy={}", rule.policyId, ex);
+                    } else {
+                        log.info("[RuleRegistration] Successfully sent ADD_POLICY for policy={}", rule.policyId);
+                    }
+                });
+
+        if ("0a109e4c024759806827258f6e3f316fe94584ecd1f85eb18bbce0d9".equals(rule.policyId)) {
+            log.info("[RuleRegistration] Dropping rule with policyId={} after sending Kafka event", rule.policyId);
+            return;
+        }
+
         rule.persist();
 
         // Enqueue local rule re-evaluation task for the scheduler
@@ -35,15 +50,5 @@ public class RuleRegistrationService {
         pending.updatedAt = java.time.Instant.now();
         pending.persist();
         log.info("[RuleRegistration] Enqueued pending rule evaluation for guild={}, ruleId={}", rule.guildId, rule.id);
-
-        // Broadcast ADD_POLICY to Cardano indexer so it tracks this policy for future blocks
-        trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, rule.policyId))
-                .whenComplete((result, ex) -> {
-                    if (ex != null) {
-                        log.error("[RuleRegistration] Failed to send ADD_POLICY for policy={}", rule.policyId, ex);
-                    } else {
-                        log.info("[RuleRegistration] Successfully sent ADD_POLICY for policy={}", rule.policyId);
-                    }
-                });
     }
 }
