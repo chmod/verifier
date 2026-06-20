@@ -25,6 +25,17 @@ public class RuleRegistrationService {
 
         rule.persist();
 
+        // Enqueue local rule re-evaluation task for the scheduler
+        dk.panos.promofacie.db.PendingRuleEvaluation pending = new dk.panos.promofacie.db.PendingRuleEvaluation();
+        pending.guildId = rule.guildId;
+        pending.ruleId = rule.id;
+        pending.status = "PENDING";
+        pending.retryCount = 0;
+        pending.createdAt = java.time.Instant.now();
+        pending.updatedAt = java.time.Instant.now();
+        pending.persist();
+        log.info("[RuleRegistration] Enqueued pending rule evaluation for guild={}, ruleId={}", rule.guildId, rule.id);
+
         // Broadcast ADD_POLICY to Cardano indexer so it tracks this policy for future blocks
         trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, rule.policyId))
                 .whenComplete((result, ex) -> {

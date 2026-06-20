@@ -53,30 +53,40 @@ public class RoleEvaluationService {
             boolean meetsRule = evaluateRuleCompliance(discordId, walletAddresses, rule);
             TargetState targetState = meetsRule ? TargetState.PRESENT : TargetState.ABSENT;
 
-            RoleSyncOutbox.getEntityManager().createNativeQuery(
-                            "INSERT INTO role_sync_outbox (discord_id, guild_id, role_id, target_state, status, event_slot, retry_count, created_at, updated_at) " +
-                                    "VALUES (:discordId, :guildId, :roleId, :targetState, 'PENDING', :eventSlot, 0, now(), now()) " +
-                                     "ON CONFLICT (discord_id, guild_id, role_id) " +
-                                    "DO UPDATE SET " +
-                                    "    target_state = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN EXCLUDED.target_state ELSE role_sync_outbox.target_state END, " +
-                                    "    status = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN 'PENDING' ELSE role_sync_outbox.status END, " +
-                                    "    retry_count = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN 0 ELSE role_sync_outbox.retry_count END, " +
-                                    "    event_slot = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN EXCLUDED.event_slot ELSE role_sync_outbox.event_slot END, " +
-                                    "    updated_at = now()"
-                    )
-                    .setParameter("discordId", discordId)
-                    .setParameter("guildId", rule.guildId)
-                    .setParameter("roleId", rule.roleId)
-                    .setParameter("targetState", targetState.name())
-                    .setParameter("eventSlot", eventSlot)
-                    .executeUpdate();
-
-            log.info("[RoleEvaluation] Upserted desired-state task to target_state={} for user={} guild={} role={} (slot={})",
-                    targetState, discordId, rule.guildId, rule.roleId, eventSlot);
+            upsertOutboxTask(discordId, rule.guildId, rule.roleId, targetState, eventSlot);
         }
     }
 
-    private boolean evaluateRuleCompliance(String discordId, List<String> walletAddresses, GuildRoleRule rule) {
+    @Transactional
+    public void upsertOutboxTask(String discordId, String guildId, String roleId, TargetState targetState, long eventSlot) {
+        RoleSyncOutbox.getEntityManager().createNativeQuery(
+                        "INSERT INTO role_sync_outbox (discord_id, guild_id, role_id, target_state, status, event_slot, retry_count, created_at, updated_at) " +
+                                "VALUES (:discordId, :guildId, :roleId, :targetState, 'PENDING', :eventSlot, 0, now(), now()) " +
+                                 "ON CONFLICT (discord_id, guild_id, role_id) " +
+                                "DO UPDATE SET " +
+                                "    target_state = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN EXCLUDED.target_state ELSE role_sync_outbox.target_state END, " +
+                                "    status = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN 'PENDING' ELSE role_sync_outbox.status END, " +
+                                "    retry_count = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN 0 ELSE role_sync_outbox.retry_count END, " +
+                                "    event_slot = CASE WHEN :eventSlot >= role_sync_outbox.event_slot THEN EXCLUDED.event_slot ELSE role_sync_outbox.event_slot END, " +
+                                "    updated_at = now()"
+                )
+                .setParameter("discordId", discordId)
+                .setParameter("guildId", guildId)
+                .setParameter("roleId", roleId)
+                .setParameter("targetState", targetState.name())
+                .setParameter("eventSlot", eventSlot)
+                .executeUpdate();
+
+        log.info("[RoleEvaluation] Upserted desired-state task to target_state={} for user={} guild={} role={} (slot={})",
+                targetState, discordId, guildId, roleId, eventSlot);
+    }
+
+    public boolean evaluateRuleCompliance(String discordId, List<String> walletAddresses, GuildRoleRule rule) {
+        if (walletAddresses == null || walletAddresses.isEmpty()) {
+            log.info("[RoleEvaluation]   User {} has no linked wallets - evaluation compliance = false", discordId);
+            return false;
+        }
+
         List<UserAssetInventory> inventoryItems = UserAssetInventory.list(
                 "id.stakeAddress in ?1 and id.policyId = ?2",
                 walletAddresses,
