@@ -46,4 +46,27 @@ public class RuleRegistrationService {
         pending.persist();
         log.info("[RuleRegistration] Enqueued pending rule evaluation for guild={}, ruleId={}", rule.guildId, rule.id);
     }
+
+    @Transactional
+    public void deleteRule(Long ruleId) {
+        GuildRoleRule rule = GuildRoleRule.findById(ruleId);
+        if (rule != null) {
+            String policyId = rule.policyId;
+            rule.delete();
+            
+            // Check if any other rules exist for this policyId
+            long count = GuildRoleRule.count("policyId = ?1", policyId);
+            if (count == 0) {
+                log.info("[RuleRegistration] No rules remaining for policyId={} — broadcasting REMOVE_POLICY", policyId);
+                trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.REMOVE_POLICY, null, policyId))
+                        .whenComplete((result, ex) -> {
+                            if (ex != null) {
+                                log.error("[RuleRegistration] Failed to send REMOVE_POLICY for policy={}", policyId, ex);
+                            } else {
+                                log.info("[RuleRegistration] Successfully sent REMOVE_POLICY for policy={}", policyId);
+                            }
+                        });
+            }
+        }
+    }
 }
