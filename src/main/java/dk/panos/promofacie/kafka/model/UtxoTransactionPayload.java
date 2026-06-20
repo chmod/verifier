@@ -24,5 +24,7 @@ public record UtxoTransactionPayload(
         @JsonProperty("spentUtxos")
         List<UtxoEntry> spentUtxos,
         @JsonProperty("snapshot")
-        boolean snapshot
+        boolean snapshot,
+        @JsonProperty("forcedSync")
+        boolean forcedSync
 ) {}

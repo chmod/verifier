@@ -17,9 +17,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.StructuredTaskScope;
-import java.util.concurrent.ThreadFactory;
 import java.util.stream.Collectors;
 
 @ApplicationScoped
@@ -48,19 +45,12 @@ public class CardanoRoleService {
         Map<String, List<Wallet>> walletsByUser = wallets.stream()
                 .collect(Collectors.groupingBy(Wallet::getDiscordId));
 
-        ThreadFactory vthreadFactory = Thread.ofVirtual().name("cardano-role-worker-", 0).factory();
-
-        try (var scope = new StructuredTaskScope.ShutdownOnFailure("CardanoRoleComputation", vthreadFactory)) {
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             for (Map.Entry<String, List<Wallet>> entry : walletsByUser.entrySet()) {
-                scope.fork(() -> {
+                executor.submit(() -> {
                     processUser(entry.getKey(), entry.getValue());
-                    return null;
                 });
             }
-            scope.join();
-            scope.throwIfFailed();
-        } catch (ExecutionException e) {
-            throw new RuntimeException("Failed processing Cardano wallets", e);
         }
 
         log.info("Cardano role updates complete.");

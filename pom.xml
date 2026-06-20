@@ -139,7 +139,6 @@
                 <configuration>
                     <parameters>true</parameters>
                     <compilerArgs>
-                        <arg>--enable-preview</arg>
                     </compilerArgs>
                     <annotationProcessorPaths>
                         <path>

@@ -9,5 +9,5 @@ import java.util.Map;
  * the same transaction. Always fetch via a JPQL constructor expression or native query,
  * never via entity loading, or this protection is lost.
  */
-public record InventoryRow(String policyId, String assetNameHex, long quantity, Map<String, String> traits) {
+public record InventoryRow(String policyId, String assetNameHex, long quantity, Map<String, String> traits, long lastUpdatedSlot) {
 }

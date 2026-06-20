@@ -82,45 +82,35 @@ public class UtxoTransactionConsumer {
 
     @Transactional
     void processSnapshotAndEvaluate(UtxoTransactionPayload payload, boolean isRollback) {
-        // Serialize processing per stake address: take a row lock via a native
-        // "SELECT ... FOR UPDATE" before reading/checking the slot. This is a pure scalar
-        // projection — it never creates a managed UserAssetInventory entity, so there's
-        // nothing in the persistence context for handleSnapshot()'s later bulk delete/persist
-        // to collide with. The lock closes the read-check-write race where two concurrent
-        // messages for the same stake address could both pass the monotonicity check against
-        // the same stale "current" slot. handleSnapshot() runs with TxType.REQUIRED, joining
-        // this same transaction, so it's covered by this same lock for its duration.
-        if (!isRollback) {
-            Long currentSlot = (Long) UserAssetInventory.getEntityManager()
-                    .createNativeQuery(
-                            "select max(last_updated_slot) from user_asset_inventory where stake_address = ?1 for update")
-                    .setParameter(1, payload.stakeAddress())
-                    .getSingleResult();
-            if (currentSlot != null && payload.slot() <= currentSlot) {
-                log.info("[UtxoConsumer] Incoming snapshot slot {} is not newer than current database slot {} for stakeAddress {} — skipping update",
-                        payload.slot(), currentSlot, payload.stakeAddress());
-                return;
-            }
-        } else {
-            // Rollback bypasses the monotonicity check by design, but still needs the same
-            // row lock to serialize against concurrent writers for this stake address.
-            UserAssetInventory.getEntityManager()
-                    .createNativeQuery("select 1 from user_asset_inventory where stake_address = ?1 for update")
-                    .setParameter(1, payload.stakeAddress())
-                    .getResultList();
-        }
-
-        // 1. Fetch "before" inventory as a read-only projection — not entities — so this
-        // query never populates the persistence context either. Safe to run after the lock
-        // above since we're still inside the same transaction holding it.
+        // 1. Fetch "before" inventory as a read-only projection (including lastUpdatedSlot) in a single query
         List<InventoryRow> beforeRows = UserAssetInventory.getEntityManager()
                 .createQuery(
-                        "select new dk.panos.promofacie.db.InventoryRow(u.id.policyId, u.id.assetNameHex, u.quantity, u.traits) " +
+                        "select new dk.panos.promofacie.db.InventoryRow(u.id.policyId, u.id.assetNameHex, u.quantity, u.traits, u.lastUpdatedSlot) " +
                                 "from UserAssetInventory u where u.id.stakeAddress = ?1",
                         InventoryRow.class)
                 .setParameter(1, payload.stakeAddress())
                 .getResultList();
         WalletInventorySnapshot before = entityMapper.mapRows(beforeRows);
+
+        // Derive currentSlot directly in-memory from beforeRows
+        Long currentSlot = beforeRows.isEmpty()
+                ? null
+                : beforeRows.stream().mapToLong(InventoryRow::lastUpdatedSlot).max().stream().boxed().findFirst().orElse(null);
+
+        if (!isRollback && !payload.forcedSync()) {
+            if (currentSlot != null && payload.slot() <= currentSlot) {
+                log.info("[UtxoConsumer] Incoming snapshot slot {} is not newer than current database slot {} for stakeAddress {} — skipping update",
+                        payload.slot(), currentSlot, payload.stakeAddress());
+                return;
+            }
+        }
+
+        if (payload.forcedSync()) {
+            log.info("[UtxoConsumer] Forced sync for stakeAddress {} at slot {} — bypassing monotonicity check",
+                    payload.stakeAddress(), payload.slot());
+        }
+
+        long resolvedSlot = currentSlot != null ? Math.max(payload.slot(), currentSlot) : payload.slot();
 
         // 2. Map incoming payload (after)
         WalletInventorySnapshot after = payloadMapper.map(payload);
@@ -138,16 +128,13 @@ public class UtxoTransactionConsumer {
             changedPolicies.add(h.policyId());
         }
 
-        // 5. Update database inventory. Runs in this same transaction (TxType.REQUIRED),
-        // so it's covered by the row lock acquired above. No detach/clear needed — step 1's
-        // projection query never created managed entities, so there's nothing stale in the
-        // persistence context for this bulk delete to collide with.
-        userAssetInventoryService.handleSnapshot(payload);
+        // 5. Update database inventory with clamped slot.
+        userAssetInventoryService.handleSnapshot(payload, resolvedSlot);
 
-        // 6. Enqueue role sync updates if policies have changed
+        // 6. Enqueue role sync updates if policies have changed, using the resolved slot
         if (!changedPolicies.isEmpty()) {
             log.info("[UtxoConsumer] Policy changes detected: {}. Enqueuing outbox role updates.", changedPolicies);
-            roleEvaluationService.enqueueRoleUpdates(payload.stakeAddress(), changedPolicies, payload.slot());
+            roleEvaluationService.enqueueRoleUpdates(payload.stakeAddress(), changedPolicies, resolvedSlot);
         } else {
             log.info("[UtxoConsumer] No policy changes detected. Skipping outbox role updates.");
         }

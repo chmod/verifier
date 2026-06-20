@@ -27,13 +27,12 @@ public class UserAssetInventoryService {
      * this write and the slot-ordering guarantee silently breaks.
      */
     @Transactional
-    public void handleSnapshot(UtxoTransactionPayload payload) {
+    public void handleSnapshot(UtxoTransactionPayload payload, long resolvedSlot) {
         String stakeAddress = payload.stakeAddress();
         log.info("[Inventory] Clearing existing inventory for stakeAddress: {}", stakeAddress);
 
         // Delete existing inventory for this stake address
         UserAssetInventory.delete("id.stakeAddress = ?1", stakeAddress);
-        UserAssetInventory.getEntityManager().clear();
         if (payload.createdUtxos() == null || payload.createdUtxos().isEmpty()) {
             log.info("[Inventory] Snapshot is empty for stakeAddress: {}", stakeAddress);
             return;
@@ -55,7 +54,7 @@ public class UserAssetInventoryService {
                     // message rather than retry it forever.
                     throw new SnapshotValidationException(
                             "Invalid quantity '%s' for policyId=%s assetName=%s stakeAddress=%s"
-                                    .formatted(amt.quantity(), amt.policyId(), amt.assetName(), stakeAddress),
+                                     .formatted(amt.quantity(), amt.policyId(), amt.assetName(), stakeAddress),
                             e);
                 }
 
@@ -68,7 +67,7 @@ public class UserAssetInventoryService {
                     item.id = id;
                     item.quantity = qty;
                     item.traits = convertTraits(amt.traits());
-                    item.lastUpdatedSlot = payload.slot();
+                    item.lastUpdatedSlot = resolvedSlot;
                     aggregated.put(id, item);
                 } else {
                     item.quantity += qty;

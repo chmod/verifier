@@ -31,9 +31,8 @@ class RoleSyncSchedulerTest {
         scheduler.jda = jda;
 
         // Group 1: user-1, guild-1
-        List<Object[]> pendingGroups = new ArrayList<>();
-        pendingGroups.add(new Object[]{"user-1", "guild-1"});
-        doReturn(pendingGroups).when(scheduler).getPendingGuildIds();
+        doReturn(List.of("guild-1")).when(scheduler).getPendingGuildIds();
+        doReturn(List.of("user-1")).when(scheduler).getPendingDiscordIdsForGuild("guild-1");
 
         RoleSyncOutbox task1 = new RoleSyncOutbox();
         task1.id = 1L;
@@ -97,9 +96,8 @@ class RoleSyncSchedulerTest {
         JDA jda = mock(JDA.class);
         scheduler.jda = jda;
 
-        List<Object[]> pendingGroups = new ArrayList<>();
-        pendingGroups.add(new Object[]{"user-1", "guild-1"});
-        doReturn(pendingGroups).when(scheduler).getPendingGuildIds();
+        doReturn(List.of("guild-1")).when(scheduler).getPendingGuildIds();
+        doReturn(List.of("user-1")).when(scheduler).getPendingDiscordIdsForGuild("guild-1");
 
         // Row has been overwritten to PRESENT by upsert
         RoleSyncOutbox task = new RoleSyncOutbox();

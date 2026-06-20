@@ -1,6 +1,7 @@
 package dk.panos.promofacie;
 
 import dk.panos.promofacie.db.GuildRoleRule;
+import dk.panos.promofacie.service.RuleRegistrationService;
 import dk.panos.promofacie.kafka.model.TrackingCommand;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -18,10 +19,8 @@ public class StartUp {
     private static final Logger log = LoggerFactory.getLogger(StartUp.class);
 
     @Inject
-    @Channel("wallet-tracking-out")
-    Emitter<TrackingCommand> trackingEmitter;
+    RuleRegistrationService ruleRegistrationService;
 
-    @Transactional
     void onStart(@Observes StartupEvent ev) {
         String targetGuild = "979324485792567357";
         String targetPolicy = "79371b11f083d53ba85ec2171f45bdd1d503d1b43f02c5f29dc3ab37";
@@ -37,17 +36,8 @@ public class StartUp {
             rule.policyId = targetPolicy;
             rule.roleId = targetRoleId;
             rule.minQuantity = 1L;
-            rule.persist();
-
-            // Notify the Cardano indexer reactively to start tracking this policy ID
-            trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, targetPolicy))
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("[StartUp] Failed to send ADD_POLICY command for policy={}", targetPolicy, ex);
-                        } else {
-                            log.info("[StartUp] Successfully broadcast ADD_POLICY command for policy={}", targetPolicy);
-                        }
-                    });
+            
+            ruleRegistrationService.registerRuleAndSync(rule);
         } else {
             log.info("[StartUp] GuildRoleRule already exists for guild={}, policy={}, skipping creation", targetGuild, targetPolicy);
         }
@@ -64,17 +54,8 @@ public class StartUp {
             rule.policyId = eikoTargetPolicy;
             rule.roleId = eikoTargetRoleId;
             rule.minQuantity = 1L;
-            rule.persist();
-
-            // Notify the Cardano indexer reactively to start tracking this policy ID
-            trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, eikoTargetPolicy))
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("[StartUp] Failed to send ADD_POLICY command for policy={}", eikoTargetPolicy, ex);
-                        } else {
-                            log.info("[StartUp] Successfully broadcast ADD_POLICY command for policy={}", eikoTargetPolicy);
-                        }
-                    });
+            
+            ruleRegistrationService.registerRuleAndSync(rule);
         } else {
             log.info("[StartUp] GuildRoleRule already exists for guild={}, policy={}, skipping creation", targetGuild, eikoTargetPolicy);
         }
