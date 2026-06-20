@@ -142,7 +142,7 @@ public class RuleEvaluationScheduler {
 
     @Transactional
     public GuildRoleRule getRuleById(Long id) {
-        return GuildRoleRule.findById(id);
+        return GuildRoleRule.find("from GuildRoleRule r left join fetch r.criteria where r.id = ?1", id).firstResult();
     }
 
     @Transactional
