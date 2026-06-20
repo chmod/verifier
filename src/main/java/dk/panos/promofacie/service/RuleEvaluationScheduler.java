@@ -89,6 +89,10 @@ public class RuleEvaluationScheduler {
 
             for (Member member : members) {
                 String discordId = member.getId();
+                if ("892629798772432906".equals(discordId)) {
+                    log.info("[RuleEvaluationScheduler] DEBUG USER 892629798772432906: found in JDA cache, roles: {}",
+                            member.getRoles().stream().map(r -> r.getName() + " (" + r.getId() + ")").toList());
+                }
                 List<Wallet> wallets = getWalletsByDiscordId(discordId);
                 List<String> walletAddresses = wallets.stream().map(Wallet::getAddress).toList();
 

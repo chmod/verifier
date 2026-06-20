@@ -214,10 +214,18 @@ public class RoleSyncScheduler {
     @Transactional
     public void markTasksDone(List<RoleSyncOutbox> tasks) {
         for (RoleSyncOutbox task : tasks) {
-            long updated = RoleSyncOutbox.update(
-                    "status = 'DONE', updatedAt = ?1 where id = ?2 and eventSlot = ?3 and status = 'PROCESSING'",
-                    Instant.now(), task.id, task.eventSlot
-            );
+            long updated;
+            if (task.eventSlot == null) {
+                updated = RoleSyncOutbox.update(
+                        "status = 'DONE', updatedAt = ?1 where id = ?2 and eventSlot is null and status = 'PROCESSING'",
+                        Instant.now(), task.id
+                );
+            } else {
+                updated = RoleSyncOutbox.update(
+                        "status = 'DONE', updatedAt = ?1 where id = ?2 and eventSlot = ?3 and status = 'PROCESSING'",
+                        Instant.now(), task.id, task.eventSlot
+                );
+            }
             if (updated == 0) {
                 log.info("[RoleSyncScheduler] Task {} was superseded during execution — leaving as-is for re-pick", task.id);
             }
@@ -230,10 +238,18 @@ public class RoleSyncScheduler {
     @Transactional
     public void markTasksFailed(List<RoleSyncOutbox> tasks, String reason) {
         for (RoleSyncOutbox task : tasks) {
-            long updated = RoleSyncOutbox.update(
-                    "status = 'FAILED', updatedAt = ?1 where id = ?2 and eventSlot = ?3 and status = 'PROCESSING'",
-                    Instant.now(), task.id, task.eventSlot
-            );
+            long updated;
+            if (task.eventSlot == null) {
+                updated = RoleSyncOutbox.update(
+                        "status = 'FAILED', updatedAt = ?1 where id = ?2 and eventSlot is null and status = 'PROCESSING'",
+                        Instant.now(), task.id
+                );
+            } else {
+                updated = RoleSyncOutbox.update(
+                        "status = 'FAILED', updatedAt = ?1 where id = ?2 and eventSlot = ?3 and status = 'PROCESSING'",
+                        Instant.now(), task.id, task.eventSlot
+                );
+            }
             if (updated == 0) {
                 log.info("[RoleSyncScheduler] Task {} was superseded before failure could be recorded — leaving as-is for re-pick", task.id);
             } else {
@@ -251,9 +267,16 @@ public class RoleSyncScheduler {
     @Transactional
     public void handleGroupFailure(List<RoleSyncOutbox> tasks, String reason) {
         for (RoleSyncOutbox task : tasks) {
-            RoleSyncOutbox managedTask = RoleSyncOutbox.find(
-                    "id = ?1 and eventSlot = ?2 and status = 'PROCESSING'", task.id, task.eventSlot
-            ).firstResult();
+            RoleSyncOutbox managedTask;
+            if (task.eventSlot == null) {
+                managedTask = RoleSyncOutbox.find(
+                        "id = ?1 and eventSlot is null and status = 'PROCESSING'", task.id
+                ).firstResult();
+            } else {
+                managedTask = RoleSyncOutbox.find(
+                        "id = ?1 and eventSlot = ?2 and status = 'PROCESSING'", task.id, task.eventSlot
+                ).firstResult();
+            }
 
             if (managedTask == null) {
                 log.info("[RoleSyncScheduler] Task {} was superseded during failure handling — leaving as-is for re-pick", task.id);

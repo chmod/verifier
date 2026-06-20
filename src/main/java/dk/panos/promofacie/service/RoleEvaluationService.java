@@ -117,6 +117,13 @@ public class RoleEvaluationService {
         }
         
         RoleSyncOutbox existing = RoleSyncOutbox.find("discordId = ?1 and guildId = ?2 and roleId = ?3", discordId, guildId, roleId).firstResult();
+        
+        if ("892629798772432906".equals(discordId)) {
+            log.info("[RoleEvaluation] DEBUG USER 892629798772432906: targetState={}, hasRole={}, discordStateMatches={}, existing={}",
+                    targetState, hasRole, discordStateMatches,
+                    existing != null ? ("id=" + existing.id + ", status=" + existing.status + ", targetState=" + existing.targetState + ", slot=" + existing.eventSlot) : "null");
+        }
+
         if (existing == null) {
             return !discordStateMatches;
         }
