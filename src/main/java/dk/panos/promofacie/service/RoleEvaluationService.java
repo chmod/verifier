@@ -7,7 +7,11 @@ import dk.panos.promofacie.db.Wallet;
 import dk.panos.promofacie.db.RoleSyncOutbox;
 import dk.panos.promofacie.db.TargetState;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.Member;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,6 +22,9 @@ import java.util.Set;
 public class RoleEvaluationService {
 
     private static final Logger log = LoggerFactory.getLogger(RoleEvaluationService.class);
+
+    @Inject
+    JDA jda;
 
     /**
      * Upserts desired-state outbox rows keyed on (discord_id, guild_id, role_id). Requires
@@ -59,6 +66,12 @@ public class RoleEvaluationService {
 
     @Transactional
     public void upsertOutboxTask(String discordId, String guildId, String roleId, TargetState targetState, long eventSlot) {
+        if (!isOutboxTaskNeeded(discordId, guildId, roleId, targetState)) {
+            log.debug("[RoleEvaluation] Skip upserting task for user={} guild={} role={} targetState={} (slot={}) as state is already in sync",
+                    discordId, guildId, roleId, targetState, eventSlot);
+            return;
+        }
+
         RoleSyncOutbox.getEntityManager().createNativeQuery(
                         "INSERT INTO role_sync_outbox (discord_id, guild_id, role_id, target_state, status, event_slot, retry_count, created_at, updated_at) " +
                                 "VALUES (:discordId, :guildId, :roleId, :targetState, 'PENDING', :eventSlot, 0, now(), now()) " +
@@ -79,6 +92,40 @@ public class RoleEvaluationService {
 
         log.info("[RoleEvaluation] Upserted desired-state task to target_state={} for user={} guild={} role={} (slot={})",
                 targetState, discordId, guildId, roleId, eventSlot);
+    }
+
+    public boolean isOutboxTaskNeeded(String discordId, String guildId, String roleId, TargetState targetState) {
+        Boolean hasRole = null;
+        if (jda != null) {
+            try {
+                Guild guild = jda.getGuildById(guildId);
+                if (guild != null) {
+                    Member member = guild.getMemberById(discordId);
+                    if (member != null) {
+                        hasRole = member.getRoles().stream().anyMatch(r -> r.getId().equals(roleId));
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[RoleEvaluation] Failed to look up member {}/guild {} roles in JDA cache: {}", discordId, guildId, e.getMessage());
+            }
+        }
+        
+        boolean discordStateMatches = false;
+        if (hasRole != null) {
+            discordStateMatches = (targetState == TargetState.PRESENT && hasRole) ||
+                                   (targetState == TargetState.ABSENT && !hasRole);
+        }
+        
+        RoleSyncOutbox existing = RoleSyncOutbox.find("discordId = ?1 and guildId = ?2 and roleId = ?3", discordId, guildId, roleId).firstResult();
+        if (existing == null) {
+            return !discordStateMatches;
+        }
+        
+        if ("PENDING".equals(existing.status) || "PROCESSING".equals(existing.status)) {
+            return existing.targetState != targetState;
+        } else {
+            return !discordStateMatches;
+        }
     }
 
     @Transactional
