@@ -23,7 +23,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 
-@Path("/{guild}")
+@Path("/configuration/{guild}")
 @Authenticated
 @ApplicationScoped
 public class RuleResource {
