@@ -174,7 +174,7 @@ public class RuleResource {
     }
 
     @GET
-    @Path("/{guild}")
+    @Path("/rules")
     @Produces(MediaType.APPLICATION_JSON)
     @Transactional
     public Response getRules(@PathParam("guild") String guild) {
