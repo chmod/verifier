@@ -178,4 +178,51 @@ class RuleResourceTest {
         assertEquals("trait-k", requestRule.criteria().get(0).traitKey());
         assertEquals("trait-v", requestRule.criteria().get(0).traitValue());
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testUpdateRulesSyncsExistingAddresses() {
+        // Arrange
+        RuleResource resource = spy(new RuleResource());
+        Emitter<TrackingCommand> emitter = mock(Emitter.class);
+        resource.trackingEmitter = emitter;
+
+        net.dv8tion.jda.api.JDA mockJda = mock(net.dv8tion.jda.api.JDA.class);
+        net.dv8tion.jda.api.entities.Guild mockGuild = mock(net.dv8tion.jda.api.entities.Guild.class);
+        net.dv8tion.jda.api.entities.Member mockMember = mock(net.dv8tion.jda.api.entities.Member.class);
+
+        resource.jda = mockJda;
+        when(mockJda.getGuildById("123456")).thenReturn(mockGuild);
+        when(mockGuild.getMembers()).thenReturn(List.of(mockMember));
+        when(mockMember.getId()).thenReturn("discord-user-1");
+
+        when(emitter.send(any(TrackingCommand.class))).thenReturn(CompletableFuture.completedFuture(null));
+
+        doReturn(Collections.emptyList()).when(resource).getExistingRules("123456");
+        doReturn(0L).when(resource).countPolicyGlobally("policy-new");
+        doNothing().when(resource).persistRule(any(GuildRoleRule.class));
+        doNothing().when(resource).persistPendingEvaluation(any(PendingRuleEvaluation.class));
+        doNothing().when(resource).flushSession();
+
+        dk.panos.promofacie.db.Wallet mockWallet = new dk.panos.promofacie.db.Wallet();
+        mockWallet.setAddress("addr123");
+        mockWallet.setDiscordId("discord-user-1");
+        doReturn(List.of(mockWallet)).when(resource).getWalletsForDiscordIds(List.of("discord-user-1"));
+
+        RuleRequest newRule = new RuleRequest("role-new", "policy-new", 1L, Collections.emptyList());
+
+        // Act
+        Response response = resource.updateRules("123456", List.of(newRule));
+
+        // Assert
+        assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+
+        // Verify tracking commands sent: ADD_POLICY for policy-new and ADD_ADDRESS for addr123
+        ArgumentCaptor<TrackingCommand> captor = ArgumentCaptor.forClass(TrackingCommand.class);
+        verify(emitter, times(2)).send(captor.capture());
+        List<TrackingCommand> sentCommands = captor.getAllValues();
+
+        assertTrue(sentCommands.stream().anyMatch(c -> c.action() == TrackingCommand.Action.ADD_POLICY && "policy-new".equals(c.policyId())));
+        assertTrue(sentCommands.stream().anyMatch(c -> c.action() == TrackingCommand.Action.ADD_ADDRESS && "addr123".equals(c.stakeAddress())));
+    }
 }

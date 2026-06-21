@@ -109,7 +109,7 @@ public class UtxoTransactionConsumer {
         log.info("[UtxoConsumer] Checking slot monotonicity for stakeAddress {}: payload slot = {}, current DB max slot = {}",
                 payload.stakeAddress(), payload.slot(), currentSlot);
 
-        if (!isRollback) {
+        if (!isRollback && !payload.forcedSync()) {
             if (currentSlot != null && payload.slot() <= currentSlot) {
                 log.warn("[UtxoConsumer] Monotonicity check failed! Incoming snapshot slot {} is not newer than current database slot {} for stakeAddress {} — skipping update",
                         payload.slot(), currentSlot, payload.stakeAddress());
@@ -117,7 +117,7 @@ public class UtxoTransactionConsumer {
             }
         }
 
-        long resolvedSlot = payload.slot();
+        long resolvedSlot = currentSlot != null ? Math.max(payload.slot(), currentSlot) : payload.slot();
 
         // 2. Map incoming payload (after)
         WalletInventorySnapshot after = payloadMapper.map(payload);

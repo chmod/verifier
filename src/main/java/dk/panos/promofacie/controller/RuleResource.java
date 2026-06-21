@@ -31,6 +31,9 @@ public class RuleResource {
     @Channel("wallet-tracking-out")
     Emitter<TrackingCommand> trackingEmitter;
 
+    @Inject
+    net.dv8tion.jda.api.JDA jda;
+
     @POST
     @Path("/rules")
     @Consumes(MediaType.APPLICATION_JSON)
@@ -154,6 +157,40 @@ public class RuleResource {
                     });
         }
 
+        if (!policyAdds.isEmpty() && jda != null) {
+            log.info("[RuleResource] Policy additions detected: {}. Triggering sync for existing guild members.", policyAdds);
+            try {
+                net.dv8tion.jda.api.entities.Guild discordGuild = jda.getGuildById(guild);
+                if (discordGuild != null) {
+                    List<net.dv8tion.jda.api.entities.Member> members = discordGuild.getMembers();
+                    List<String> memberIds = members.stream()
+                            .map(net.dv8tion.jda.api.entities.Member::getId)
+                            .toList();
+                    log.info("[RuleResource] Found {} guild member(s) in JDA cache for guild {}", memberIds.size(), guild);
+                    if (!memberIds.isEmpty()) {
+                        // Find all verified Cardano addresses of these guild members
+                        List<dk.panos.promofacie.db.Wallet> wallets = getWalletsForDiscordIds(memberIds);
+                        log.info("[RuleResource] Found {} verified wallet(s) for the members of guild {}", wallets.size(), guild);
+                        for (dk.panos.promofacie.db.Wallet wallet : wallets) {
+                            log.info("[RuleResource] Broadcasting ADD_ADDRESS to trigger sync for stakeAddress={}", wallet.getAddress());
+                            trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null))
+                                    .whenComplete((res, ex) -> {
+                                        if (ex != null) {
+                                            log.error("[RuleResource] Failed to broadcast ADD_ADDRESS for stakeAddress={}", wallet.getAddress(), ex);
+                                        } else {
+                                            log.info("[RuleResource] Successfully sent ADD_ADDRESS for stakeAddress={}", wallet.getAddress());
+                                        }
+                                    });
+                        }
+                    }
+                } else {
+                    log.warn("[RuleResource] Guild {} not found in JDA cache; cannot sync existing addresses", guild);
+                }
+            } catch (Exception e) {
+                log.error("[RuleResource] Failed to trigger sync for existing addresses", e);
+            }
+        }
+
         for (String policyId : policyRemovals) {
             log.info("[RuleResource] Broadcasting REMOVE_POLICY tracking command for policyId={}", policyId);
             trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.REMOVE_POLICY, null, policyId))
@@ -239,5 +276,9 @@ public class RuleResource {
 
     void flushSession() {
         GuildRoleRule.getEntityManager().flush();
+    }
+
+    List<dk.panos.promofacie.db.Wallet> getWalletsForDiscordIds(List<String> discordIds) {
+        return dk.panos.promofacie.db.Wallet.list("discordId in ?1", discordIds);
     }
 }
