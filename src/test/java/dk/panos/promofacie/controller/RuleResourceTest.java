@@ -40,6 +40,7 @@ class RuleResourceTest {
         doReturn(0L).when(resource).countPolicyInOtherGuilds("policy-1", "123456");
         doNothing().when(resource).deletePendingEvaluations(10L);
         doNothing().when(resource).deleteRule(existingRule1);
+        doNothing().when(resource).flushSession();
 
         // Act
         Response response = resource.updateRules("123456", Collections.emptyList());
@@ -89,6 +90,7 @@ class RuleResourceTest {
         doNothing().when(resource).deleteRule(existingRule1);
         doNothing().when(resource).persistRule(any(GuildRoleRule.class));
         doNothing().when(resource).persistPendingEvaluation(any(PendingRuleEvaluation.class));
+        doNothing().when(resource).flushSession();
 
         // New rules: has policy-2 with role-2
         RuleRequest newRule = new RuleRequest(

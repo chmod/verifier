@@ -109,6 +109,7 @@ public class RuleResource {
             deletePendingEvaluations(existingRule.id);
             deleteRule(existingRule);
         }
+        flushSession();
 
         // 5. Persist new rules and enqueue PendingRuleEvaluations
         for (RuleRequest ruleReq : newRulesList) {
@@ -234,5 +235,9 @@ public class RuleResource {
 
     void persistPendingEvaluation(PendingRuleEvaluation pending) {
         pending.persist();
+    }
+
+    void flushSession() {
+        GuildRoleRule.getEntityManager().flush();
     }
 }
