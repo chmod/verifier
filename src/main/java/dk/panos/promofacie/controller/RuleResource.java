@@ -39,6 +39,7 @@ public class RuleResource {
     @Produces(MediaType.APPLICATION_JSON)
     @Transactional
     public Response updateRules(@PathParam("guild") String guild, List<RuleRequest> rules) {
+        log.info("[RuleResource] Updating ruleset for guild={} and set {}", guild, rules);
         if (guild == null || guild.isBlank()) {
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity(Map.of("error", "Guild ID is required"))
