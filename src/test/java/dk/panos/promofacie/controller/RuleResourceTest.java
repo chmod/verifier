@@ -138,4 +138,42 @@ class RuleResourceTest {
         assertTrue(commands.stream().anyMatch(c -> c.action() == TrackingCommand.Action.ADD_POLICY && "policy-2".equals(c.policyId())));
         assertTrue(commands.stream().anyMatch(c -> c.action() == TrackingCommand.Action.REMOVE_POLICY && "policy-1".equals(c.policyId())));
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testGetRules() {
+        // Arrange
+        RuleResource resource = spy(new RuleResource());
+
+        GuildRoleRule rule = new GuildRoleRule();
+        rule.id = 10L;
+        rule.guildId = "123456";
+        rule.roleId = "role-1";
+        rule.policyId = "policy-1";
+        rule.minQuantity = 5L;
+
+        dk.panos.promofacie.db.RuleTraitCriteria criteria = new dk.panos.promofacie.db.RuleTraitCriteria();
+        criteria.traitKey = "trait-k";
+        criteria.traitValue = "trait-v";
+        rule.addCriteria(criteria);
+
+        doReturn(List.of(rule)).when(resource).getExistingRules("123456");
+
+        // Act
+        Response response = resource.getRules("123456");
+
+        // Assert
+        assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+        List<RuleRequest> body = (List<RuleRequest>) response.getEntity();
+
+        assertNotNull(body);
+        assertEquals(1, body.size());
+        RuleRequest requestRule = body.get(0);
+        assertEquals("role-1", requestRule.roleId());
+        assertEquals("policy-1", requestRule.policyId());
+        assertEquals(5L, requestRule.minQuantity());
+        assertEquals(1, requestRule.criteria().size());
+        assertEquals("trait-k", requestRule.criteria().get(0).traitKey());
+        assertEquals("trait-v", requestRule.criteria().get(0).traitValue());
+    }
 }

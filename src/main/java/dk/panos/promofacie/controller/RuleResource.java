@@ -1,12 +1,12 @@
 package dk.panos.promofacie.controller;
 
+import dk.panos.promofacie.controller.model.CriteriaRequest;
 import dk.panos.promofacie.controller.model.RuleRequest;
 import dk.panos.promofacie.controller.model.RuleUpdateResponse;
 import dk.panos.promofacie.db.GuildRoleRule;
 import dk.panos.promofacie.db.PendingRuleEvaluation;
 import dk.panos.promofacie.db.RuleTraitCriteria;
 import dk.panos.promofacie.kafka.model.TrackingCommand;
-import io.quarkus.security.Authenticated;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -21,7 +21,6 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
-
 
 @Path("/configuration/{guild}")
 @ApplicationScoped
@@ -77,7 +76,8 @@ public class RuleResource {
         List<String> policyAdds = new ArrayList<>();
         List<String> policyRemovals = new ArrayList<>();
 
-        // policyAdds: present in new rules but NOT present in the DB at all (globally) before this change
+        // policyAdds: present in new rules but NOT present in the DB at all (globally)
+        // before this change
         for (String policyId : newPolicies) {
             if (!existingPolicies.contains(policyId)) {
                 long count = countPolicyGlobally(policyId);
@@ -87,7 +87,8 @@ public class RuleResource {
             }
         }
 
-        // policyRemovals: present in existingPolicies, but NOT in newPolicies, AND no other rules exist for this policy in other guilds
+        // policyRemovals: present in existingPolicies, but NOT in newPolicies, AND no
+        // other rules exist for this policy in other guilds
         for (String policyId : existingPolicies) {
             if (!newPolicies.contains(policyId)) {
                 long count = countPolicyInOtherGuilds(policyId, guild);
@@ -167,10 +168,43 @@ public class RuleResource {
         // 7. Return 200 OK with the diff response
         RuleUpdateResponse responseBody = new RuleUpdateResponse(
                 new RuleUpdateResponse.PoliciesDiff(policyAdds, policyRemovals),
-                new RuleUpdateResponse.RolesDiff(rolesApplying, rolesRemove)
-        );
+                new RuleUpdateResponse.RolesDiff(rolesApplying, rolesRemove));
 
         return Response.ok(responseBody).build();
+    }
+
+    @GET
+    @Path("/{guild}")
+    @Produces(MediaType.APPLICATION_JSON)
+    @Transactional
+    public Response getRules(@PathParam("guild") String guild) {
+        if (guild == null || guild.isBlank()) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(Map.of("error", "Guild ID is required"))
+                    .build();
+        }
+
+        log.info("[RuleResource] Fetching ruleset for guild={}", guild);
+
+        List<GuildRoleRule> existingRules = getExistingRules(guild);
+
+        List<RuleRequest> responseList = existingRules.stream()
+                .map(rule -> {
+                    List<CriteriaRequest> criteriaList = Collections.emptyList();
+                    if (rule.criteria != null) {
+                        criteriaList = rule.criteria.stream()
+                                .map(c -> new CriteriaRequest(c.traitKey, c.traitValue))
+                                .collect(Collectors.toList());
+                    }
+                    return new RuleRequest(
+                            rule.roleId,
+                            rule.policyId,
+                            rule.minQuantity,
+                            criteriaList);
+                })
+                .collect(Collectors.toList());
+
+        return Response.ok(responseList).build();
     }
 
     // Database helper methods to support isolated unit testing via Spying
