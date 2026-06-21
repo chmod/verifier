@@ -22,7 +22,8 @@ import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 
-@Path("/api/rules")
+
+@Path("/{guild}")
 @Authenticated
 @ApplicationScoped
 public class RuleResource {
@@ -33,7 +34,7 @@ public class RuleResource {
     Emitter<TrackingCommand> trackingEmitter;
 
     @POST
-    @Path("/{guild}")
+    @Path("/rules")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
     @Transactional
