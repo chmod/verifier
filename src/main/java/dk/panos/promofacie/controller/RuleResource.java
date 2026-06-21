@@ -24,7 +24,6 @@ import java.util.stream.Collectors;
 
 
 @Path("/configuration/{guild}")
-@Authenticated
 @ApplicationScoped
 public class RuleResource {
     private static final Logger log = LoggerFactory.getLogger(RuleResource.class);
