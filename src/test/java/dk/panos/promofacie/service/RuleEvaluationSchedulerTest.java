@@ -70,8 +70,8 @@ class RuleEvaluationSchedulerTest {
         doReturn(500L).when(scheduler).getMaxInventorySlot(List.of("address-1"));
 
         // Compliance evaluation mock
-        when(roleEvaluationService.evaluateRuleCompliance("user-1", List.of("address-1"), rule)).thenReturn(true);
-        when(roleEvaluationService.evaluateRuleCompliance("user-2", List.of(), rule)).thenReturn(false);
+        when(roleEvaluationService.evaluateRoleEligibility("user-1", List.of("address-1"), "guild-1", "role-gold")).thenReturn(true);
+        when(roleEvaluationService.evaluateRoleEligibility("user-2", List.of(), "guild-1", "role-gold")).thenReturn(false);
 
         doNothing().when(scheduler).markTasksDone(any());
 

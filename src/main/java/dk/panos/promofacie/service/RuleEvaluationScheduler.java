@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -87,6 +88,11 @@ public class RuleEvaluationScheduler {
                 return;
             }
 
+            // Group rules by roleId to run a single aggregated evaluation per role
+            Set<String> uniqueRoleIds = rules.stream()
+                    .map(r -> r.roleId)
+                    .collect(Collectors.toSet());
+
             for (Member member : members) {
                 String discordId = member.getId();
                 if ("892629798772432906".equals(discordId)) {
@@ -104,11 +110,11 @@ public class RuleEvaluationScheduler {
                     }
                 }
 
-                for (GuildRoleRule rule : rules) {
-                    boolean meetsRule = roleEvaluationService.evaluateRuleCompliance(discordId, walletAddresses, rule);
-                    TargetState targetState = meetsRule ? TargetState.PRESENT : TargetState.ABSENT;
+                for (String roleId : uniqueRoleIds) {
+                    boolean meetsGroupedRules = roleEvaluationService.evaluateRoleEligibility(discordId, walletAddresses, guildId, roleId);
+                    TargetState targetState = meetsGroupedRules ? TargetState.PRESENT : TargetState.ABSENT;
 
-                    roleEvaluationService.upsertOutboxTask(discordId, guildId, rule.roleId, targetState, eventSlot);
+                    roleEvaluationService.upsertOutboxTask(discordId, guildId, roleId, targetState, eventSlot);
                 }
             }
 

@@ -14,5 +14,12 @@ public record RuleRequest(
         Long minQuantity,
 
         @JsonProperty("criteria")
-        List<CriteriaRequest> criteria
-) {}
+        List<CriteriaRequest> criteria,
+
+        @JsonProperty("group")
+        Integer group
+) {
+    public RuleRequest(String roleId, String policyId, Long minQuantity, List<CriteriaRequest> criteria) {
+        this(roleId, policyId, minQuantity, criteria, null);
+    }
+}

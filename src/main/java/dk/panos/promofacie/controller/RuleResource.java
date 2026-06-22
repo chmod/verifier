@@ -114,6 +114,14 @@ public class RuleResource {
         }
         flushSession();
 
+        int maxGroup = newRulesList.stream()
+                .map(RuleRequest::group)
+                .filter(Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .max()
+                .orElse(0);
+        int autoGroupBase = maxGroup + 1;
+
         // 5. Persist new rules and enqueue PendingRuleEvaluations
         for (RuleRequest ruleReq : newRulesList) {
             GuildRoleRule rule = new GuildRoleRule();
@@ -121,6 +129,7 @@ public class RuleResource {
             rule.roleId = ruleReq.roleId();
             rule.policyId = ruleReq.policyId();
             rule.minQuantity = ruleReq.minQuantity() != null ? ruleReq.minQuantity() : 1L;
+            rule.ruleGroup = ruleReq.group() != null ? ruleReq.group() : autoGroupBase++;
 
             if (ruleReq.criteria() != null) {
                 for (var critReq : ruleReq.criteria()) {
@@ -226,6 +235,16 @@ public class RuleResource {
 
         List<GuildRoleRule> existingRules = getExistingRules(guild);
 
+        // Count group occurrences per (roleId, ruleGroup) pair
+        Map<String, Map<Integer, Long>> groupCounts = existingRules.stream()
+                .collect(Collectors.groupingBy(
+                        r -> r.roleId,
+                        Collectors.groupingBy(
+                                r -> r.ruleGroup,
+                                Collectors.counting()
+                        )
+                ));
+
         List<RuleRequest> responseList = existingRules.stream()
                 .map(rule -> {
                     List<CriteriaRequest> criteriaList = Collections.emptyList();
@@ -234,11 +253,16 @@ public class RuleResource {
                                 .map(c -> new CriteriaRequest(c.traitKey, c.traitValue))
                                 .collect(Collectors.toList());
                     }
+                    Long count = groupCounts.getOrDefault(rule.roleId, Collections.emptyMap())
+                            .getOrDefault(rule.ruleGroup, 0L);
+                    Integer responseGroup = count > 1 ? rule.ruleGroup : null;
+
                     return new RuleRequest(
                             rule.roleId,
                             rule.policyId,
                             rule.minQuantity,
-                            criteriaList);
+                            criteriaList,
+                            responseGroup);
                 })
                 .collect(Collectors.toList());
 

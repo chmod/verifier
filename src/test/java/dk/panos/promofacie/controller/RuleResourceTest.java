@@ -225,4 +225,100 @@ class RuleResourceTest {
         assertTrue(sentCommands.stream().anyMatch(c -> c.action() == TrackingCommand.Action.ADD_POLICY && "policy-new".equals(c.policyId())));
         assertTrue(sentCommands.stream().anyMatch(c -> c.action() == TrackingCommand.Action.ADD_ADDRESS && "addr123".equals(c.stakeAddress())));
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testUpdateRulesWithCustomGroup() {
+        // Arrange
+        RuleResource resource = spy(new RuleResource());
+        Emitter<TrackingCommand> emitter = mock(Emitter.class);
+        resource.trackingEmitter = emitter;
+
+        when(emitter.send(any(TrackingCommand.class))).thenReturn(CompletableFuture.completedFuture(null));
+
+        doReturn(Collections.emptyList()).when(resource).getExistingRules("123456");
+        doReturn(0L).when(resource).countPolicyGlobally("policy-group");
+        doNothing().when(resource).persistRule(any(GuildRoleRule.class));
+        doNothing().when(resource).persistPendingEvaluation(any(PendingRuleEvaluation.class));
+        doNothing().when(resource).flushSession();
+
+        RuleRequest newRule = new RuleRequest(
+                "role-group",
+                "policy-group",
+                1L,
+                Collections.emptyList(),
+                3 // custom group
+        );
+
+        // Act
+        Response response = resource.updateRules("123456", List.of(newRule));
+
+        // Assert
+        assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+
+        ArgumentCaptor<GuildRoleRule> ruleCaptor = ArgumentCaptor.forClass(GuildRoleRule.class);
+        verify(resource, times(1)).persistRule(ruleCaptor.capture());
+        GuildRoleRule persisted = ruleCaptor.getValue();
+        assertEquals("123456", persisted.guildId);
+        assertEquals("role-group", persisted.roleId);
+        assertEquals("policy-group", persisted.policyId);
+        assertEquals(3, persisted.ruleGroup);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testGetRulesWithGroups() {
+        // Arrange
+        RuleResource resource = spy(new RuleResource());
+
+        GuildRoleRule rule1 = new GuildRoleRule();
+        rule1.id = 10L;
+        rule1.guildId = "123456";
+        rule1.roleId = "role-1";
+        rule1.policyId = "policy-1";
+        rule1.minQuantity = 5L;
+        rule1.ruleGroup = 2; // custom group
+
+        // rule2 is in the same group, so count > 1
+        GuildRoleRule rule2 = new GuildRoleRule();
+        rule2.id = 11L;
+        rule2.guildId = "123456";
+        rule2.roleId = "role-1";
+        rule2.policyId = "policy-2";
+        rule2.minQuantity = 10L;
+        rule2.ruleGroup = 2; // custom group
+
+        // rule3 is in its own group (standalone), so count == 1
+        GuildRoleRule rule3 = new GuildRoleRule();
+        rule3.id = 12L;
+        rule3.guildId = "123456";
+        rule3.roleId = "role-1";
+        rule3.policyId = "policy-3";
+        rule3.minQuantity = 1L;
+        rule3.ruleGroup = 3; // standalone group
+
+        doReturn(List.of(rule1, rule2, rule3)).when(resource).getExistingRules("123456");
+
+        // Act
+        Response response = resource.getRules("123456");
+
+        // Assert
+        assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+        List<RuleRequest> body = (List<RuleRequest>) response.getEntity();
+
+        assertNotNull(body);
+        assertEquals(3, body.size());
+
+        // rule1 (part of group 2 of size 2) -> returns 2
+        RuleRequest requestRule1 = body.stream().filter(r -> "policy-1".equals(r.policyId())).findFirst().orElseThrow();
+        assertEquals(2, requestRule1.group());
+
+        // rule2 (part of group 2 of size 2) -> returns 2
+        RuleRequest requestRule2 = body.stream().filter(r -> "policy-2".equals(r.policyId())).findFirst().orElseThrow();
+        assertEquals(2, requestRule2.group());
+
+        // rule3 (part of group 3 of size 1) -> returns null
+        RuleRequest requestRule3 = body.stream().filter(r -> "policy-3".equals(r.policyId())).findFirst().orElseThrow();
+        assertNull(requestRule3.group());
+    }
 }

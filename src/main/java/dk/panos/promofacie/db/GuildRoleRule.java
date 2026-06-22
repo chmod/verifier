@@ -7,7 +7,7 @@ import java.util.List;
 
 @Entity
 @Table(name = "guild_role_rules", uniqueConstraints = {
-        @UniqueConstraint(name = "uq_guild_role_policy", columnNames = {"guild_id", "role_id", "policy_id"})
+        @UniqueConstraint(name = "uq_guild_role_policy_group", columnNames = {"guild_id", "role_id", "policy_id", "rule_group"})
 }, indexes = {
         @Index(name = "idx_rules_policy_search", columnList = "policy_id")
 })
@@ -24,6 +24,9 @@ public class GuildRoleRule extends PanacheEntity {
 
     @Column(name = "min_quantity", nullable = false)
     public Long minQuantity = 1L;
+
+    @Column(name = "rule_group", nullable = false)
+    public Integer ruleGroup = 1;
 
     @OneToMany(mappedBy = "rule", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     public List<RuleTraitCriteria> criteria = new ArrayList<>();

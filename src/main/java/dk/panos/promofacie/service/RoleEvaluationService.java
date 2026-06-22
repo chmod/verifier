@@ -16,7 +16,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class RoleEvaluationService {
@@ -51,17 +53,71 @@ public class RoleEvaluationService {
         List<Wallet> userWallets = Wallet.list("discordId = ?1", discordId);
         List<String> walletAddresses = userWallets.stream().map(Wallet::getAddress).toList();
 
-        List<GuildRoleRule> rules = GuildRoleRule.list("policyId in ?1", changedPolicies);
-        log.info("[RoleEvaluation] Found {} rule(s) matching changed policies for user {}", rules.size(), discordId);
+        List<GuildRoleRule> matchedRules = GuildRoleRule.list("policyId in ?1", changedPolicies);
+        log.info("[RoleEvaluation] Found {} matched rule(s) for changed policies", matchedRules.size());
 
-        for (GuildRoleRule rule : rules) {
-            log.info("[RoleEvaluation] Evaluating compliance for user {} in guild {} for role {} [policyId={}, minQuantity={}]",
-                    discordId, rule.guildId, rule.roleId, rule.policyId, rule.minQuantity);
-            boolean meetsRule = evaluateRuleCompliance(discordId, walletAddresses, rule);
-            TargetState targetState = meetsRule ? TargetState.PRESENT : TargetState.ABSENT;
+        // Group the matched rules by (guildId, roleId) to execute a single aggregated evaluation per role
+        Map<String, Set<String>> affectedRolesByGuild = matchedRules.stream()
+                .collect(Collectors.groupingBy(
+                        rule -> rule.guildId,
+                        Collectors.mapping(rule -> rule.roleId, Collectors.toSet())
+                ));
 
-            upsertOutboxTask(discordId, rule.guildId, rule.roleId, targetState, eventSlot);
+        for (Map.Entry<String, Set<String>> guildEntry : affectedRolesByGuild.entrySet()) {
+            String guildId = guildEntry.getKey();
+            for (String roleId : guildEntry.getValue()) {
+                boolean meetsGroupedRules = evaluateRoleEligibility(discordId, walletAddresses, guildId, roleId);
+                TargetState targetState = meetsGroupedRules ? TargetState.PRESENT : TargetState.ABSENT;
+
+                upsertOutboxTask(discordId, guildId, roleId, targetState, eventSlot);
+            }
         }
+    }
+
+    @Transactional
+    public boolean evaluateRoleEligibility(String discordId, List<String> walletAddresses, String guildId, String roleId) {
+        // Fetch all rules configured for this role in this guild eagerly
+        List<GuildRoleRule> rules = GuildRoleRule.list("guildId = ?1 and roleId = ?2", guildId, roleId);
+        if (rules.isEmpty()) {
+            log.info("[RoleEvaluation] No rules configured for user {} in guild {} for role {} - evaluation compliance = false",
+                    discordId, guildId, roleId);
+            return false;
+        }
+
+        // Group rules by their ruleGroup ID (e.g. Group 1, Group 2)
+        Map<Integer, List<GuildRoleRule>> groupedRules = rules.stream()
+                .collect(Collectors.groupingBy(r -> r.ruleGroup));
+
+        log.info("[RoleEvaluation] Evaluating role eligibility for user {} in guild {} for role {}. Found {} rule group(s).",
+                discordId, guildId, roleId, groupedRules.size());
+
+        // Outer level is OR: at least one group must be satisfied
+        for (Map.Entry<Integer, List<GuildRoleRule>> entry : groupedRules.entrySet()) {
+            int groupId = entry.getKey();
+            List<GuildRoleRule> group = entry.getValue();
+            boolean groupSatisfied = true;
+
+            log.info("[RoleEvaluation]   Evaluating rule group {} containing {} rule(s)", groupId, group.size());
+
+            // Inner level is AND: all rules in the group must be satisfied
+            for (GuildRoleRule rule : group) {
+                if (!evaluateRuleCompliance(discordId, walletAddresses, rule)) {
+                    groupSatisfied = false;
+                    log.info("[RoleEvaluation]   Rule group {} NOT satisfied (failed rule id={} on policy {})",
+                            groupId, rule.id, rule.policyId);
+                    break;
+                }
+            }
+
+            if (groupSatisfied) {
+                log.info("[RoleEvaluation]   Rule group {} satisfied! User matches all group criteria.", groupId);
+                return true; // Satisfied one of the OR pathways
+            }
+        }
+
+        log.info("[RoleEvaluation]   No rule groups satisfied for user {} in guild {} for role {}.",
+                discordId, guildId, roleId);
+        return false; // None of the groups were satisfied
     }
 
     @Transactional
