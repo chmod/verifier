@@ -77,7 +77,7 @@ public class RoleEvaluationService {
     @Transactional
     public boolean evaluateRoleEligibility(String discordId, List<String> walletAddresses, String guildId, String roleId) {
         // Fetch all rules configured for this role in this guild eagerly
-        List<GuildRoleRule> rules = GuildRoleRule.list("guildId = ?1 and roleId = ?2", guildId, roleId);
+        List<GuildRoleRule> rules = getRulesForRole(guildId, roleId);
         if (rules.isEmpty()) {
             log.info("[RoleEvaluation] No rules configured for user {} in guild {} for role {} - evaluation compliance = false",
                     discordId, guildId, roleId);
@@ -95,23 +95,27 @@ public class RoleEvaluationService {
         for (Map.Entry<Integer, List<GuildRoleRule>> entry : groupedRules.entrySet()) {
             int groupId = entry.getKey();
             List<GuildRoleRule> group = entry.getValue();
-            boolean groupSatisfied = true;
 
             log.info("[RoleEvaluation]   Evaluating rule group {} containing {} rule(s)", groupId, group.size());
 
-            // Inner level is AND: all rules in the group must be satisfied
+            long groupTotalQty = 0;
+            long groupRequiredQty = 0;
+
             for (GuildRoleRule rule : group) {
-                if (!evaluateRuleCompliance(discordId, walletAddresses, rule)) {
-                    groupSatisfied = false;
-                    log.info("[RoleEvaluation]   Rule group {} NOT satisfied (failed rule id={} on policy {})",
-                            groupId, rule.id, rule.policyId);
-                    break;
-                }
+                long ruleQty = getRuleMatchingQuantity(discordId, walletAddresses, rule);
+                groupTotalQty += ruleQty;
+                groupRequiredQty += rule.minQuantity;
+                log.info("[RoleEvaluation]     Rule id={} policy={} matchingQty={} -> groupTotalQty={}, groupRequiredQty={}",
+                        rule.id, rule.policyId, ruleQty, groupTotalQty, groupRequiredQty);
             }
 
-            if (groupSatisfied) {
-                log.info("[RoleEvaluation]   Rule group {} satisfied! User matches all group criteria.", groupId);
+            if (groupTotalQty >= groupRequiredQty) {
+                log.info("[RoleEvaluation]   Rule group {} satisfied! Total matching quantity {} meets required quantity {}",
+                        groupId, groupTotalQty, groupRequiredQty);
                 return true; // Satisfied one of the OR pathways
+            } else {
+                log.info("[RoleEvaluation]   Rule group {} NOT satisfied! Total matching quantity {} is less than required quantity {}",
+                        groupId, groupTotalQty, groupRequiredQty);
             }
         }
 
@@ -193,9 +197,17 @@ public class RoleEvaluationService {
 
     @Transactional
     public boolean evaluateRuleCompliance(String discordId, List<String> walletAddresses, GuildRoleRule rule) {
+        long matchingQuantity = getRuleMatchingQuantity(discordId, walletAddresses, rule);
+        boolean result = matchingQuantity >= rule.minQuantity;
+        log.info("[RoleEvaluation]   Evaluation Result for user {} / policy {}: matchingQty={} (required={}) -> meetsRule={}",
+                discordId, rule.policyId, matchingQuantity, rule.minQuantity, result);
+        return result;
+    }
+
+    public long getRuleMatchingQuantity(String discordId, List<String> walletAddresses, GuildRoleRule rule) {
         if (walletAddresses == null || walletAddresses.isEmpty()) {
-            log.info("[RoleEvaluation]   User {} has no linked wallets - evaluation compliance = false", discordId);
-            return false;
+            log.info("[RoleEvaluation]   User {} has no linked wallets - matching quantity = 0", discordId);
+            return 0;
         }
 
         List<UserAssetInventory> inventoryItems = UserAssetInventory.list(
@@ -227,10 +239,10 @@ public class RoleEvaluationService {
                         item.id.policyId, item.id.assetNameHex, item.quantity, matchingQuantity);
             }
         }
+        return matchingQuantity;
+    }
 
-        boolean result = matchingQuantity >= rule.minQuantity;
-        log.info("[RoleEvaluation]   Evaluation Result for user {} / policy {}: matchingQty={} (required={}) -> meetsRule={}",
-                discordId, rule.policyId, matchingQuantity, rule.minQuantity, result);
-        return result;
+    List<GuildRoleRule> getRulesForRole(String guildId, String roleId) {
+        return GuildRoleRule.list("guildId = ?1 and roleId = ?2", guildId, roleId);
     }
 }
