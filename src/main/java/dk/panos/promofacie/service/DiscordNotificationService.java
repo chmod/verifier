@@ -25,40 +25,40 @@ public class DiscordNotificationService {
     }
 
     public void sendTransactionNotification(TransactionMessage message) {
-        try {
-            Guild guild = jda.getGuildById(GUILD_ID);
-            if (guild == null) {
-                log.error("Could not find Discord Guild with ID: {}", GUILD_ID);
-                return;
-            }
-
-            TextChannel channel = guild.getTextChannelById(CHANNEL_ID);
-            if (channel == null) {
-                log.error("Could not find Text Channel with ID: {} in Guild: {}", CHANNEL_ID, guild.getName());
-                return;
-            }
-
-            String formattedMessage = String.format("**New Transaction Detected!**\n" +
-                    "**Asset:** %s\n" +
-                    "**Quantity:** %s\n" +
-                    "**View:** %s", message.name(), message.quantity(), message.url());
-
-            channel.sendMessage(formattedMessage).queue(
-                success -> log.info("Successfully sent transaction notification to Discord channel: {}", CHANNEL_ID),
-                failure -> log.error("Failed to send message to Discord channel: {}", CHANNEL_ID, failure)
-            );
-
-            channel = guild.getTextChannelById(CHANNEL_ID_2);
-            if (channel == null) {
-                log.error("Could not find Text Channel with ID: {} in Guild: {}", CHANNEL_ID_2, guild.getName());
-                return;
-            }
-            channel.sendMessage(formattedMessage).queue(
-                success -> log.info("Successfully sent transaction notification to Discord channel: {}", CHANNEL_ID_2),
-                failure -> log.error("Failed to send message to Discord channel: {}", CHANNEL_ID_2, failure)
-            );
-        } catch (Exception e) {
-            log.error("Failed to process transaction notification to Discord", e);
-        }
+//        try {
+//            Guild guild = jda.getGuildById(GUILD_ID);
+//            if (guild == null) {
+//                log.error("Could not find Discord Guild with ID: {}", GUILD_ID);
+//                return;
+//            }
+//
+//            TextChannel channel = guild.getTextChannelById(CHANNEL_ID);
+//            if (channel == null) {
+//                log.error("Could not find Text Channel with ID: {} in Guild: {}", CHANNEL_ID, guild.getName());
+//                return;
+//            }
+//
+//            String formattedMessage = String.format("**New Transaction Detected!**\n" +
+//                    "**Asset:** %s\n" +
+//                    "**Quantity:** %s\n" +
+//                    "**View:** %s", message.name(), message.quantity(), message.url());
+//
+//            channel.sendMessage(formattedMessage).queue(
+//                success -> log.info("Successfully sent transaction notification to Discord channel: {}", CHANNEL_ID),
+//                failure -> log.error("Failed to send message to Discord channel: {}", CHANNEL_ID, failure)
+//            );
+//
+//            channel = guild.getTextChannelById(CHANNEL_ID_2);
+//            if (channel == null) {
+//                log.error("Could not find Text Channel with ID: {} in Guild: {}", CHANNEL_ID_2, guild.getName());
+//                return;
+//            }
+//            channel.sendMessage(formattedMessage).queue(
+//                success -> log.info("Successfully sent transaction notification to Discord channel: {}", CHANNEL_ID_2),
+//                failure -> log.error("Failed to send message to Discord channel: {}", CHANNEL_ID_2, failure)
+//            );
+//        } catch (Exception e) {
+//            log.error("Failed to process transaction notification to Discord", e);
+//        }
     }
 }
