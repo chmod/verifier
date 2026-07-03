@@ -120,7 +120,6 @@
     </dependencies>
 
     <build>
-        <directory>target-cli</directory>
         <plugins>
             <plugin>
                 <groupId>${quarkus.platform.group-id}</groupId>
