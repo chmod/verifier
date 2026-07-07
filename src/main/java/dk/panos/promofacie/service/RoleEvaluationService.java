@@ -242,25 +242,27 @@ public class RoleEvaluationService {
 
         long matchingQuantity = 0;
         for (UserAssetInventory item : inventoryItems) {
-            boolean matchesAllCriteria = true;
-            if (rule.criteria != null && !rule.criteria.isEmpty()) {
-                for (RuleTraitCriteria criterion : rule.criteria) {
-                    String traitValue = item.traits != null ? item.traits.get(criterion.traitKey) : null;
-                    if (traitValue == null || !traitValue.equalsIgnoreCase(criterion.traitValue)) {
-                        matchesAllCriteria = false;
-                        log.info("[RoleEvaluation]     Item policy={}, asset={}, qty={} FAILED trait criteria: expected {}={}, found {}",
-                                item.id.policyId, item.id.assetNameHex, item.quantity, criterion.traitKey, criterion.traitValue, traitValue);
-                        break;
-                    }
-                }
-            }
-            if (matchesAllCriteria) {
+            if (satisfiesCriteria(item, rule)) {
                 matchingQuantity += item.quantity;
                 log.info("[RoleEvaluation]     Item policy={}, asset={}, qty={} PASSED criteria. Current total={}",
                         item.id.policyId, item.id.assetNameHex, item.quantity, matchingQuantity);
             }
         }
         return matchingQuantity;
+    }
+
+    public boolean satisfiesCriteria(UserAssetInventory item, GuildRoleRule rule) {
+        if (rule.criteria != null && !rule.criteria.isEmpty()) {
+            for (RuleTraitCriteria criterion : rule.criteria) {
+                String traitValue = item.traits != null ? item.traits.get(criterion.traitKey) : null;
+                if (traitValue == null || !traitValue.equalsIgnoreCase(criterion.traitValue)) {
+                    log.info("[RoleEvaluation]     Item policy={}, asset={}, qty={} FAILED trait criteria: expected {}={}, found {}",
+                            item.id.policyId, item.id.assetNameHex, item.quantity, criterion.traitKey, criterion.traitValue, traitValue);
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     List<GuildRoleRule> getRulesForRole(String guildId, String roleId) {
