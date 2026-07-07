@@ -98,24 +98,45 @@ public class RoleEvaluationService {
 
             log.info("[RoleEvaluation]   Evaluating rule group {} containing {} rule(s)", groupId, group.size());
 
-            long groupTotalQty = 0;
-            long groupRequiredQty = 0;
+            boolean isAndGroup = group.stream().anyMatch(r -> Boolean.TRUE.equals(r.isAnd));
 
-            for (GuildRoleRule rule : group) {
-                long ruleQty = getRuleMatchingQuantity(discordId, walletAddresses, rule);
-                groupTotalQty += ruleQty;
-                groupRequiredQty += rule.minQuantity;
-                log.info("[RoleEvaluation]     Rule id={} policy={} matchingQty={} -> groupTotalQty={}, groupRequiredQty={}",
-                        rule.id, rule.policyId, ruleQty, groupTotalQty, groupRequiredQty);
-            }
-
-            if (groupTotalQty >= groupRequiredQty) {
-                log.info("[RoleEvaluation]   Rule group {} satisfied! Total matching quantity {} meets required quantity {}",
-                        groupId, groupTotalQty, groupRequiredQty);
-                return true; // Satisfied one of the OR pathways
+            if (isAndGroup) {
+                boolean groupSatisfied = true;
+                for (GuildRoleRule rule : group) {
+                    long ruleQty = getRuleMatchingQuantity(discordId, walletAddresses, rule);
+                    boolean ruleCompliant = ruleQty >= rule.minQuantity;
+                    log.info("[RoleEvaluation]     (AND Group) Rule id={} policy={} matchingQty={} (required={}) -> ruleCompliant={}",
+                            rule.id, rule.policyId, ruleQty, rule.minQuantity, ruleCompliant);
+                    if (!ruleCompliant) {
+                        groupSatisfied = false;
+                    }
+                }
+                if (groupSatisfied) {
+                    log.info("[RoleEvaluation]   Rule group {} (AND) satisfied!", groupId);
+                    return true; // Satisfied one of the OR pathways
+                } else {
+                    log.info("[RoleEvaluation]   Rule group {} (AND) NOT satisfied!", groupId);
+                }
             } else {
-                log.info("[RoleEvaluation]   Rule group {} NOT satisfied! Total matching quantity {} is less than required quantity {}",
-                        groupId, groupTotalQty, groupRequiredQty);
+                long groupTotalQty = 0;
+                long groupRequiredQty = 0;
+
+                for (GuildRoleRule rule : group) {
+                    long ruleQty = getRuleMatchingQuantity(discordId, walletAddresses, rule);
+                    groupTotalQty += ruleQty;
+                    groupRequiredQty += rule.minQuantity;
+                    log.info("[RoleEvaluation]     (SUM Group) Rule id={} policy={} matchingQty={} -> groupTotalQty={}, groupRequiredQty={}",
+                            rule.id, rule.policyId, ruleQty, groupTotalQty, groupRequiredQty);
+                }
+
+                if (groupTotalQty >= groupRequiredQty) {
+                    log.info("[RoleEvaluation]   Rule group {} (SUM) satisfied! Total matching quantity {} meets required quantity {}",
+                            groupId, groupTotalQty, groupRequiredQty);
+                    return true; // Satisfied one of the OR pathways
+                } else {
+                    log.info("[RoleEvaluation]   Rule group {} (SUM) NOT satisfied! Total matching quantity {} is less than required quantity {}",
+                            groupId, groupTotalQty, groupRequiredQty);
+                }
             }
         }
 

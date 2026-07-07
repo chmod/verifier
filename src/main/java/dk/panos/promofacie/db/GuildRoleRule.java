@@ -28,6 +28,9 @@ public class GuildRoleRule extends PanacheEntity {
     @Column(name = "rule_group", nullable = false)
     public Integer ruleGroup = 1;
 
+    @Column(name = "is_and", nullable = false)
+    public Boolean isAnd = false;
+
     @OneToMany(mappedBy = "rule", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     public List<RuleTraitCriteria> criteria = new ArrayList<>();
 

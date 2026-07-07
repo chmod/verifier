@@ -130,6 +130,7 @@ public class RuleResource {
             rule.policyId = ruleReq.policyId();
             rule.minQuantity = ruleReq.minQuantity() != null ? ruleReq.minQuantity() : 1L;
             rule.ruleGroup = ruleReq.group() != null ? ruleReq.group() : autoGroupBase++;
+            rule.isAnd = ruleReq.isAnd() != null ? ruleReq.isAnd() : false;
 
             if (ruleReq.criteria() != null) {
                 for (var critReq : ruleReq.criteria()) {
@@ -262,7 +263,8 @@ public class RuleResource {
                             rule.policyId,
                             rule.minQuantity,
                             criteriaList,
-                            responseGroup);
+                            responseGroup,
+                            rule.isAnd);
                 })
                 .collect(Collectors.toList());
 

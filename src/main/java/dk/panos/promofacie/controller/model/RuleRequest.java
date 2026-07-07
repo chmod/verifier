@@ -17,9 +17,16 @@ public record RuleRequest(
         List<CriteriaRequest> criteria,
 
         @JsonProperty("group")
-        Integer group
+        Integer group,
+
+        @JsonProperty("isAnd")
+        Boolean isAnd
 ) {
     public RuleRequest(String roleId, String policyId, Long minQuantity, List<CriteriaRequest> criteria) {
-        this(roleId, policyId, minQuantity, criteria, null);
+        this(roleId, policyId, minQuantity, criteria, null, null);
+    }
+
+    public RuleRequest(String roleId, String policyId, Long minQuantity, List<CriteriaRequest> criteria, Integer group) {
+        this(roleId, policyId, minQuantity, criteria, group, null);
     }
 }

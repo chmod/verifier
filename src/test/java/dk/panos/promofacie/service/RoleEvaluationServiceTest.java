@@ -48,4 +48,44 @@ class RoleEvaluationServiceTest {
         boolean result2 = service.evaluateRoleEligibility("user-1", List.of("addr-1"), "guild-1", "role-vip");
         assertFalse(result2);
     }
+
+    @Test
+    void testEvaluateRoleEligibilityAndGroup() {
+        RoleEvaluationService service = spy(new RoleEvaluationService());
+
+        // Setup mock rules
+        GuildRoleRule rule1 = new GuildRoleRule();
+        rule1.id = 1L;
+        rule1.guildId = "guild-1";
+        rule1.roleId = "role-vip";
+        rule1.policyId = "policy-a";
+        rule1.minQuantity = 5L;
+        rule1.ruleGroup = 1;
+        rule1.isAnd = true;
+
+        GuildRoleRule rule2 = new GuildRoleRule();
+        rule2.id = 2L;
+        rule2.guildId = "guild-1";
+        rule2.roleId = "role-vip";
+        rule2.policyId = "policy-b";
+        rule2.minQuantity = 4L;
+        rule2.ruleGroup = 1;
+        rule2.isAnd = true;
+
+        doReturn(List.of(rule1, rule2)).when(service).getRulesForRole("guild-1", "role-vip");
+
+        // Scenario 1: User has 7 of policy-a (>=5) and 4 of policy-b (>=4). Satisfied.
+        doReturn(7L).when(service).getRuleMatchingQuantity("user-1", List.of("addr-1"), rule1);
+        doReturn(4L).when(service).getRuleMatchingQuantity("user-1", List.of("addr-1"), rule2);
+
+        boolean result1 = service.evaluateRoleEligibility("user-1", List.of("addr-1"), "guild-1", "role-vip");
+        assertTrue(result1);
+
+        // Scenario 2: User has 7 of policy-a (>=5) but only 3 of policy-b (<4). Failed.
+        doReturn(7L).when(service).getRuleMatchingQuantity("user-1", List.of("addr-1"), rule1);
+        doReturn(3L).when(service).getRuleMatchingQuantity("user-1", List.of("addr-1"), rule2);
+
+        boolean result2 = service.evaluateRoleEligibility("user-1", List.of("addr-1"), "guild-1", "role-vip");
+        assertFalse(result2);
+    }
 }
