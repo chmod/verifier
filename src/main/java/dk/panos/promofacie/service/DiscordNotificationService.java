@@ -14,8 +14,7 @@ public class DiscordNotificationService {
     private static final Logger log = LoggerFactory.getLogger(DiscordNotificationService.class);
 
     private static final String GUILD_ID = "979324485792567357";
-    private static final String CHANNEL_ID = "1516371490755579914";
-    private static final String CHANNEL_ID_2 = "1254156786571935766";
+    private static final String CHANNEL_ID = "1338684907664441395";
 
     private final JDA jda;
 
@@ -25,40 +24,30 @@ public class DiscordNotificationService {
     }
 
     public void sendTransactionNotification(TransactionMessage message) {
-//        try {
-//            Guild guild = jda.getGuildById(GUILD_ID);
-//            if (guild == null) {
-//                log.error("Could not find Discord Guild with ID: {}", GUILD_ID);
-//                return;
-//            }
-//
-//            TextChannel channel = guild.getTextChannelById(CHANNEL_ID);
-//            if (channel == null) {
-//                log.error("Could not find Text Channel with ID: {} in Guild: {}", CHANNEL_ID, guild.getName());
-//                return;
-//            }
-//
-//            String formattedMessage = String.format("**New Transaction Detected!**\n" +
-//                    "**Asset:** %s\n" +
-//                    "**Quantity:** %s\n" +
-//                    "**View:** %s", message.name(), message.quantity(), message.url());
-//
-//            channel.sendMessage(formattedMessage).queue(
-//                success -> log.info("Successfully sent transaction notification to Discord channel: {}", CHANNEL_ID),
-//                failure -> log.error("Failed to send message to Discord channel: {}", CHANNEL_ID, failure)
-//            );
-//
-//            channel = guild.getTextChannelById(CHANNEL_ID_2);
-//            if (channel == null) {
-//                log.error("Could not find Text Channel with ID: {} in Guild: {}", CHANNEL_ID_2, guild.getName());
-//                return;
-//            }
-//            channel.sendMessage(formattedMessage).queue(
-//                success -> log.info("Successfully sent transaction notification to Discord channel: {}", CHANNEL_ID_2),
-//                failure -> log.error("Failed to send message to Discord channel: {}", CHANNEL_ID_2, failure)
-//            );
-//        } catch (Exception e) {
-//            log.error("Failed to process transaction notification to Discord", e);
-//        }
+        try {
+            Guild guild = jda.getGuildById(GUILD_ID);
+            if (guild == null) {
+                log.error("Could not find Discord Guild with ID: {}", GUILD_ID);
+                return;
+            }
+
+            TextChannel channel = guild.getTextChannelById(CHANNEL_ID);
+            if (channel == null) {
+                log.error("Could not find Text Channel with ID: {} in Guild: {}", CHANNEL_ID, guild.getName());
+                return;
+            }
+
+            String formattedMessage = String.format("**New Transaction Detected!**\n" +
+                    "**Asset:** %s\n" +
+                    "**Quantity:** %s\n" +
+                    "**View:** %s", message.name(), message.quantity(), message.url());
+
+            channel.sendMessage(formattedMessage).queue(
+                success -> log.info("Successfully sent transaction notification to Discord channel: {}", CHANNEL_ID),
+                failure -> log.error("Failed to send message to Discord channel: {}", CHANNEL_ID, failure)
+            );
+        } catch (Exception e) {
+            log.error("Failed to process transaction notification to Discord", e);
+        }
     }
 }
