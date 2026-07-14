@@ -8,5 +8,9 @@ public record TransactionMessage(
         @JsonProperty("name")
         String name,
         @JsonProperty("url")
-        String url
+        String url,
+        @JsonProperty("policyId")
+        String policyId,
+        @JsonProperty("price")
+        String price
 ) {}

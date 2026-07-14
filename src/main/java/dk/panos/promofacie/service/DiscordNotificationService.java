@@ -1,8 +1,11 @@
 package dk.panos.promofacie.service;
 
+import dk.panos.promofacie.db.Notification;
+import dk.panos.promofacie.db.NotificationChannel;
 import dk.panos.promofacie.kafka.model.TransactionMessage;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.transaction.Transactional;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
@@ -13,9 +16,6 @@ import org.slf4j.LoggerFactory;
 public class DiscordNotificationService {
     private static final Logger log = LoggerFactory.getLogger(DiscordNotificationService.class);
 
-    private static final String GUILD_ID = "979324485792567357";
-    private static final String CHANNEL_ID = "1338684907664441395";
-
     private final JDA jda;
 
     @Inject
@@ -23,31 +23,62 @@ public class DiscordNotificationService {
         this.jda = jda;
     }
 
+    @Transactional
     public void sendTransactionNotification(TransactionMessage message) {
+        if (message.policyId() == null || message.policyId().isBlank()) {
+            log.warn("[DiscordNotification] Received transaction message without policy ID, skipping notification");
+            return;
+        }
+
         try {
-            Guild guild = jda.getGuildById(GUILD_ID);
-            if (guild == null) {
-                log.error("Could not find Discord Guild with ID: {}", GUILD_ID);
+            // Query notification settings for the given policyId
+            Notification notification = Notification.find("policyId", message.policyId()).firstResult();
+            if (notification == null) {
+                log.info("[DiscordNotification] No notification configuration found in database for policyId: {}", message.policyId());
                 return;
             }
 
-            TextChannel channel = guild.getTextChannelById(CHANNEL_ID);
+            if (notification.channels == null || notification.channels.isEmpty()) {
+                log.info("[DiscordNotification] Notification configuration has no channels configured for policyId: {}", message.policyId());
+                return;
+            }
+
+            for (NotificationChannel channel : notification.channels) {
+                if (channel.type == NotificationChannel.ChannelType.DISCORD) {
+                    sendDiscordChannelNotification(channel.guildId, channel.channelId, message);
+                }
+            }
+        } catch (Exception e) {
+            log.error("[DiscordNotification] Failed to query or dispatch notifications for policyId: {}", message.policyId(), e);
+        }
+    }
+
+    private void sendDiscordChannelNotification(String guildId, String channelId, TransactionMessage message) {
+        try {
+            Guild guild = jda.getGuildById(guildId);
+            if (guild == null) {
+                log.error("Could not find Discord Guild with ID: {}", guildId);
+                return;
+            }
+
+            TextChannel channel = guild.getTextChannelById(channelId);
             if (channel == null) {
-                log.error("Could not find Text Channel with ID: {} in Guild: {}", CHANNEL_ID, guild.getName());
+                log.error("Could not find Text Channel with ID: {} in Guild: {}", channelId, guild.getName());
                 return;
             }
 
             String formattedMessage = String.format("**New Transaction Detected!**\n" +
                     "**Asset:** %s\n" +
                     "**Quantity:** %s\n" +
-                    "**View:** %s", message.name(), message.quantity(), message.url());
+                    "**Price:** %s\n" +
+                    "**View:** %s", message.name(), message.quantity(), message.price(), message.url());
 
             channel.sendMessage(formattedMessage).queue(
-                success -> log.info("Successfully sent transaction notification to Discord channel: {}", CHANNEL_ID),
-                failure -> log.error("Failed to send message to Discord channel: {}", CHANNEL_ID, failure)
+                success -> log.info("Successfully sent transaction notification to Discord channel: {}", channelId),
+                failure -> log.error("Failed to send message to Discord channel: {}", channelId, failure)
             );
         } catch (Exception e) {
-            log.error("Failed to process transaction notification to Discord", e);
+            log.error("Failed to send Discord notification to channel: {}", channelId, e);
         }
     }
 }

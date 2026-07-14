@@ -19,6 +19,8 @@ public record TrackingCommand(
         ADD_ADDRESS,
         REMOVE_ADDRESS,
         ADD_POLICY,
-        REMOVE_POLICY
+        REMOVE_POLICY,
+        ADD_MINT_POLICY,
+        REMOVE_MINT_POLICY
     }
 }
