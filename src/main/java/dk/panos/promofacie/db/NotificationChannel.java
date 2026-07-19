@@ -1,6 +1,8 @@
 package dk.panos.promofacie.db;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.quarkus.hibernate.orm.panache.PanacheEntity;
 import jakarta.persistence.*;
 
@@ -18,9 +20,13 @@ public class NotificationChannel extends PanacheEntity {
     public ChannelType type;
 
     @Column(name = "guild_id")
+    @JsonProperty("guildId")
+    @JsonAlias("guild_id")
     public String guildId;
 
     @Column(name = "channel_id")
+    @JsonProperty("channelId")
+    @JsonAlias("channel_id")
     public String channelId;
 
     public enum ChannelType {
