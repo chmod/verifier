@@ -67,11 +67,24 @@ public class DiscordNotificationService {
                 return;
             }
 
-            String formattedMessage = String.format("**New Transaction Detected!**\n" +
+            String header = "**New Transaction Detected!**";
+            if ("MINT".equals(message.type())) {
+                header = "**New Mint Detected!** 🆕";
+            } else if ("SALE".equals(message.type())) {
+                header = "**New Sale Detected!** 🛒";
+            } else if ("SELL".equals(message.type())) {
+                header = "**New Sell Swap Detected!** 🔄";
+            } else if ("LISTING".equals(message.type())) {
+                header = "**New Listing Detected!** 🏷️";
+            } else if ("OFFER".equals(message.type())) {
+                header = "**New Collection Offer!** 🤝";
+            }
+
+            String formattedMessage = String.format("%s\n" +
                     "**Asset:** %s\n" +
                     "**Quantity:** %s\n" +
                     "**Price:** %s\n" +
-                    "**View:** %s", message.name(), message.quantity(), message.price(), message.url());
+                    "**View:** %s", header, message.name(), message.quantity(), message.price(), message.url());
 
             channel.sendMessage(formattedMessage).queue(
                 success -> log.info("Successfully sent transaction notification to Discord channel: {}", channelId),

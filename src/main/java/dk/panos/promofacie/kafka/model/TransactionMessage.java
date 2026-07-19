@@ -12,5 +12,7 @@ public record TransactionMessage(
         @JsonProperty("policyId")
         String policyId,
         @JsonProperty("price")
-        String price
+        String price,
+        @JsonProperty("type")
+        String type
 ) {}
