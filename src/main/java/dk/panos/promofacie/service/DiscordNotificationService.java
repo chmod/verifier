@@ -125,14 +125,11 @@ public class DiscordNotificationService {
             return "Unknown";
         }
         try {
-            byte[] decodedSecret = Base64.getDecoder().decode(secret);
-            SecretKey key = new SecretKeySpec(decodedSecret, "HMACSHA256");
-
             String jwt = Jwt.issuer("promofacie")
                     .audience("promofacie-dashboard")
                     .subject("promofacie-bot")
                     .expiresIn(Duration.of(1, ChronoUnit.HOURS))
-                    .sign(key);
+                    .signWithSecret(secret);
 
             List<Map<String, String>> policies = dashboardApiClient.fetchPolicies("Bearer " + jwt);
             if (policies != null) {
