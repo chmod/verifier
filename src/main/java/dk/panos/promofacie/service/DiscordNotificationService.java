@@ -20,6 +20,9 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.Base64;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 
 @ApplicationScoped
 public class DiscordNotificationService {
@@ -49,12 +52,14 @@ public class DiscordNotificationService {
             // Query notification settings for the given policyId
             Notification notification = Notification.find("policyId", message.policyId()).firstResult();
             if (notification == null) {
-                log.info("[DiscordNotification] No notification configuration found in database for policyId: {}", message.policyId());
+                log.info("[DiscordNotification] No notification configuration found in database for policyId: {}",
+                        message.policyId());
                 return;
             }
 
             if (notification.channels == null || notification.channels.isEmpty()) {
-                log.info("[DiscordNotification] Notification configuration has no channels configured for policyId: {}", message.policyId());
+                log.info("[DiscordNotification] Notification configuration has no channels configured for policyId: {}",
+                        message.policyId());
                 return;
             }
 
@@ -64,7 +69,8 @@ public class DiscordNotificationService {
                 }
             }
         } catch (Exception e) {
-            log.error("[DiscordNotification] Failed to query or dispatch notifications for policyId: {}", message.policyId(), e);
+            log.error("[DiscordNotification] Failed to query or dispatch notifications for policyId: {}",
+                    message.policyId(), e);
         }
     }
 
@@ -107,9 +113,8 @@ public class DiscordNotificationService {
                     "**View:** %s", header, assetName, message.quantity(), message.price(), message.url());
 
             channel.sendMessage(formattedMessage).queue(
-                success -> log.info("Successfully sent transaction notification to Discord channel: {}", channelId),
-                failure -> log.error("Failed to send message to Discord channel: {}", channelId, failure)
-            );
+                    success -> log.info("Successfully sent transaction notification to Discord channel: {}", channelId),
+                    failure -> log.error("Failed to send message to Discord channel: {}", channelId, failure));
         } catch (Exception e) {
             log.error("Failed to send Discord notification to channel: {}", channelId, e);
         }
@@ -120,11 +125,14 @@ public class DiscordNotificationService {
             return "Unknown";
         }
         try {
+            byte[] decodedSecret = Base64.getDecoder().decode(secret);
+            SecretKey key = new SecretKeySpec(decodedSecret, "HMACSHA256");
+
             String jwt = Jwt.issuer("promofacie")
                     .audience("promofacie-dashboard")
                     .subject("promofacie-bot")
                     .expiresIn(Duration.of(1, ChronoUnit.HOURS))
-                    .signWithSecret(secret);
+                    .sign(key);
 
             List<Map<String, String>> policies = dashboardApiClient.fetchPolicies("Bearer " + jwt);
             if (policies != null) {
