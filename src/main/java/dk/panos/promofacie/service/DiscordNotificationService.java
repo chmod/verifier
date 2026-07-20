@@ -41,6 +41,17 @@ public class DiscordNotificationService {
         this.jda = jda;
     }
 
+    void onStart(@jakarta.enterprise.event.Observes io.quarkus.runtime.StartupEvent ev) {
+        log.info("[DiscordNotification] Testing Dashboard API connection on startup...");
+        try {
+            String testResult = resolvePolicyName("6c79a125d11bdf0cd0323dde9ce28d5ea201a259159205d7539c41d4");
+            log.info("[DiscordNotification] Startup test finished. Result for 'test_policy_id_startup': {}",
+                    testResult);
+        } catch (Exception e) {
+            log.error("[DiscordNotification] Startup test failed!", e);
+        }
+    }
+
     @Transactional
     public void sendTransactionNotification(TransactionMessage message) {
         if (message.policyId() == null || message.policyId().isBlank()) {
