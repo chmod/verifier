@@ -12,11 +12,26 @@ import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.smallrye.jwt.build.Jwt;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.eclipse.microprofile.rest.client.inject.RestClient;
+
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
+
 @ApplicationScoped
 public class DiscordNotificationService {
     private static final Logger log = LoggerFactory.getLogger(DiscordNotificationService.class);
 
     private final JDA jda;
+
+    @RestClient
+    DashboardApiClient dashboardApiClient;
+
+    @ConfigProperty(name = "dashboard.jwt_secret")
+    String secret;
 
     @Inject
     public DiscordNotificationService(JDA jda) {
@@ -80,11 +95,16 @@ public class DiscordNotificationService {
                 header = "**New Collection Offer!** 🤝";
             }
 
+            String assetName = message.name();
+            if ("OFFER".equals(message.type())) {
+                assetName = resolvePolicyName(message.policyId());
+            }
+
             String formattedMessage = String.format("%s\n" +
                     "**Asset:** %s\n" +
                     "**Quantity:** %s\n" +
                     "**Price:** %s\n" +
-                    "**View:** %s", header, message.name(), message.quantity(), message.price(), message.url());
+                    "**View:** %s", header, assetName, message.quantity(), message.price(), message.url());
 
             channel.sendMessage(formattedMessage).queue(
                 success -> log.info("Successfully sent transaction notification to Discord channel: {}", channelId),
@@ -93,5 +113,30 @@ public class DiscordNotificationService {
         } catch (Exception e) {
             log.error("Failed to send Discord notification to channel: {}", channelId, e);
         }
+    }
+
+    private String resolvePolicyName(String policyId) {
+        if (policyId == null || policyId.isBlank()) {
+            return "Unknown";
+        }
+        try {
+            String jwt = Jwt.issuer("promofacie")
+                    .audience("promofacie-dashboard")
+                    .subject("promofacie-bot")
+                    .expiresIn(Duration.of(1, ChronoUnit.HOURS))
+                    .signWithSecret(secret);
+
+            List<Map<String, String>> policies = dashboardApiClient.fetchPolicies("Bearer " + jwt);
+            if (policies != null) {
+                for (Map<String, String> map : policies) {
+                    if (map.containsKey(policyId)) {
+                        return map.get(policyId);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to resolve policy name for policy ID: {}", policyId, e);
+        }
+        return policyId;
     }
 }
