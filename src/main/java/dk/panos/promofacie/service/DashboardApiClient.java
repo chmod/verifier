@@ -14,5 +14,5 @@ public interface DashboardApiClient {
 
     @GET
     @Path("/fetch-policies")
-    List<Map<String, String>> fetchPolicies(@HeaderParam("Authorization") String authorization);
+    Map<String, String> fetchPolicies(@HeaderParam("Authorization") String authorization);
 }

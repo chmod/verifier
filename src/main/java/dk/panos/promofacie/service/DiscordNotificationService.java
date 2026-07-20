@@ -142,13 +142,9 @@ public class DiscordNotificationService {
                     .expiresIn(Duration.of(1, ChronoUnit.HOURS))
                     .signWithSecret(secret);
 
-            List<Map<String, String>> policies = dashboardApiClient.fetchPolicies("Bearer " + jwt);
-            if (policies != null) {
-                for (Map<String, String> map : policies) {
-                    if (map.containsKey(policyId)) {
-                        return map.get(policyId);
-                    }
-                }
+            Map<String, String> policies = dashboardApiClient.fetchPolicies("Bearer " + jwt);
+            if (policies != null && policies.containsKey(policyId)) {
+                return policies.get(policyId);
             }
         } catch (Exception e) {
             log.error("Failed to resolve policy name for policy ID: {}", policyId, e);
