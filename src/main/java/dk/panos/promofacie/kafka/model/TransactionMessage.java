@@ -14,5 +14,13 @@ public record TransactionMessage(
         @JsonProperty("price")
         String price,
         @JsonProperty("type")
-        String type
+        String type,
+        @JsonProperty("txHash")
+        String txHash,
+        @JsonProperty("offerType")
+        String offerType,
+        @JsonProperty("requestedAssetNameHex")
+        String requestedAssetNameHex,
+        @JsonProperty("bundledMultiPolicy")
+        Boolean bundledMultiPolicy
 ) {}

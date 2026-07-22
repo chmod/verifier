@@ -18,6 +18,7 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Base64;
@@ -109,21 +110,54 @@ public class DiscordNotificationService {
             } else if ("LISTING".equals(message.type())) {
                 header = "**New Listing Detected!** 🏷️";
             } else if ("OFFER".equals(message.type())) {
-                header = "**New Collection Offer!** 🤝";
+                if ("ASSET_OFFER".equals(message.offerType())) {
+                    header = "**New Item Offer!** 🤝";
+                } else {
+                    header = "**New Collection Offer!** 🤝";
+                }
             }
 
             String assetName = message.name();
-            if ("OFFER".equals(message.type())) {
+            if ("OFFER".equals(message.type()) && (assetName == null || assetName.isBlank())) {
                 assetName = resolvePolicyName(message.policyId());
             }
 
-            String formattedMessage = String.format("%s\n" +
-                    "**Asset:** %s\n" +
-                    "**Quantity:** %s\n" +
-                    "**Price:** %s\n" +
-                    "**View:** %s", header, assetName, message.quantity(), message.price(), message.url());
+            String cardanoscanUrl = (message.txHash() != null && !message.txHash().isBlank())
+                    ? "https://cardanoscan.io/transaction/" + message.txHash()
+                    : null;
 
-            channel.sendMessage(formattedMessage).queue(
+            StringBuilder sb = new StringBuilder();
+            sb.append("-# ").append(header).append("\n\n");
+            sb.append("🎯 **Asset:** ").append(assetName != null ? assetName : "Unknown").append("\n");
+            sb.append("🤓 **Quantity:** ").append(message.quantity() != null ? message.quantity() : "1").append("\n");
+            sb.append("💰 **Price:** ").append(message.price() != null ? message.price() : "Unknown").append("\n\n");
+
+            if (message.url() != null && !message.url().isBlank()) {
+                sb.append("👀 **View:** ").append(message.url()).append("\n");
+            }
+            if (cardanoscanUrl != null) {
+                sb.append("🔗 **TX:** [Cardanoscan](").append(cardanoscanUrl).append(")\n");
+            }
+
+            String formattedMessage = sb.toString().trim();
+
+            List<net.dv8tion.jda.api.interactions.components.buttons.Button> buttons = new ArrayList<>();
+            if (message.url() != null && !message.url().isBlank()) {
+                buttons.add(net.dv8tion.jda.api.interactions.components.buttons.Button.link(message.url(), "View on Pool.pm")
+                        .withEmoji(net.dv8tion.jda.api.entities.emoji.Emoji.fromUnicode("👀")));
+            }
+            if (cardanoscanUrl != null) {
+                buttons.add(net.dv8tion.jda.api.interactions.components.buttons.Button.link(cardanoscanUrl, "View Transaction")
+                        .withEmoji(net.dv8tion.jda.api.entities.emoji.Emoji.fromUnicode("🔗")));
+            }
+
+            net.dv8tion.jda.api.utils.messages.MessageCreateBuilder messageBuilder = new net.dv8tion.jda.api.utils.messages.MessageCreateBuilder()
+                    .setContent(formattedMessage);
+            if (!buttons.isEmpty()) {
+                messageBuilder.setActionRow(buttons);
+            }
+
+            channel.sendMessage(messageBuilder.build()).queue(
                     success -> log.info("Successfully sent transaction notification to Discord channel: {}", channelId),
                     failure -> log.error("Failed to send message to Discord channel: {}", channelId, failure));
         } catch (Exception e) {
