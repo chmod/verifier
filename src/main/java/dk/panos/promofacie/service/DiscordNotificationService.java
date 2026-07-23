@@ -146,11 +146,18 @@ public class DiscordNotificationService {
 
             boolean isWayup = "Wayup".equalsIgnoreCase(message.platform()) ||
                     (message.url() != null && message.url().toLowerCase().contains("wayup"));
-            if (isWayup && message.policyId() != null && !message.policyId().isBlank() &&
-                    message.requestedAssetNameHex() != null && !message.requestedAssetNameHex().isBlank()) {
-                String wayupUrl = "https://www.wayup.io/collection/" + message.policyId() + "/asset/" + message.requestedAssetNameHex();
-                buttons.add(net.dv8tion.jda.api.interactions.components.buttons.Button.link(wayupUrl, "View on WayUp")
-                        .withEmoji(net.dv8tion.jda.api.entities.emoji.Emoji.fromUnicode("🛍️")));
+            if (isWayup) {
+                if (message.policyId() != null && !message.policyId().isBlank() &&
+                        message.requestedAssetNameHex() != null && !message.requestedAssetNameHex().isBlank()) {
+                    String wayupUrl = "https://www.wayup.io/collection/" + message.policyId() + "/asset/" + message.requestedAssetNameHex();
+                    buttons.add(net.dv8tion.jda.api.interactions.components.buttons.Button.link(wayupUrl, "View on WayUp")
+                            .withEmoji(net.dv8tion.jda.api.entities.emoji.Emoji.fromUnicode("🛍️")));
+                    log.info("[Discord] Identified platform as WayUp for txHash={} — attached WayUp button: {}", message.txHash(), wayupUrl);
+                } else {
+                    log.warn("[Discord] Platform is WayUp but missing policyId or requestedAssetNameHex for txHash={}, cannot build WayUp button", message.txHash());
+                }
+            } else {
+                log.info("[Discord] Platform is not WayUp (platform={}) for txHash={}", message.platform(), message.txHash());
             }
 
             net.dv8tion.jda.api.utils.messages.MessageCreateBuilder messageBuilder = new net.dv8tion.jda.api.utils.messages.MessageCreateBuilder()
