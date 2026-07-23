@@ -130,14 +130,7 @@ public class DiscordNotificationService {
             sb.append("-# ").append(header).append("\n\n");
             sb.append("🎯 **Asset:** ").append(assetName != null ? assetName : "Unknown").append("\n");
             sb.append("🤓 **Quantity:** ").append(message.quantity() != null ? message.quantity() : "1").append("\n");
-            sb.append("💰 **Price:** ").append(message.price() != null ? message.price() : "Unknown").append("\n\n");
-
-            if (message.url() != null && !message.url().isBlank()) {
-                sb.append("👀 **View:** ").append(message.url()).append("\n");
-            }
-            if (cardanoscanUrl != null) {
-                sb.append("🔗 **TX:** [Cardanoscan](").append(cardanoscanUrl).append(")\n");
-            }
+            sb.append("💰 **Price:** ").append(message.price() != null ? message.price() : "Unknown");
 
             String formattedMessage = sb.toString().trim();
 
@@ -149,6 +142,15 @@ public class DiscordNotificationService {
             if (cardanoscanUrl != null) {
                 buttons.add(net.dv8tion.jda.api.interactions.components.buttons.Button.link(cardanoscanUrl, "View Transaction")
                         .withEmoji(net.dv8tion.jda.api.entities.emoji.Emoji.fromUnicode("🔗")));
+            }
+
+            boolean isWayup = "Wayup".equalsIgnoreCase(message.platform()) ||
+                    (message.url() != null && message.url().toLowerCase().contains("wayup"));
+            if (isWayup && message.policyId() != null && !message.policyId().isBlank() &&
+                    message.requestedAssetNameHex() != null && !message.requestedAssetNameHex().isBlank()) {
+                String wayupUrl = "https://www.wayup.io/collection/" + message.policyId() + "/asset/" + message.requestedAssetNameHex();
+                buttons.add(net.dv8tion.jda.api.interactions.components.buttons.Button.link(wayupUrl, "View on WayUp")
+                        .withEmoji(net.dv8tion.jda.api.entities.emoji.Emoji.fromUnicode("🛍️")));
             }
 
             net.dv8tion.jda.api.utils.messages.MessageCreateBuilder messageBuilder = new net.dv8tion.jda.api.utils.messages.MessageCreateBuilder()

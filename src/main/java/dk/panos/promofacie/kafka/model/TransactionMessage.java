@@ -22,5 +22,7 @@ public record TransactionMessage(
         @JsonProperty("requestedAssetNameHex")
         String requestedAssetNameHex,
         @JsonProperty("bundledMultiPolicy")
-        Boolean bundledMultiPolicy
+        Boolean bundledMultiPolicy,
+        @JsonProperty("platform")
+        String platform
 ) {}
