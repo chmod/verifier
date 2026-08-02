@@ -5,6 +5,8 @@ import jakarta.transaction.Transactional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
+
 @ApplicationScoped
 public class WalletPersistenceService {
 
@@ -18,5 +20,27 @@ public class WalletPersistenceService {
         wallet.setChain(Chain.CARDANO);
         wallet.persist();
         log.info("Wallet persisted stakeAddress={} discordId={}", stakeAddress, discordId);
+    }
+
+    public List<Wallet> findByDiscordId(String discordId) {
+        return Wallet.list("discordId", discordId);
+    }
+
+    public Wallet findByAddressAndDiscordId(String stakeAddress, String discordId) {
+        return Wallet.find("discordId = ?1 and address = ?2", discordId, stakeAddress).firstResult();
+    }
+
+    @Transactional
+    public boolean deleteByAddressAndDiscordId(String stakeAddress, String discordId) {
+        long deletedCount = Wallet.delete("discordId = ?1 and address = ?2", discordId, stakeAddress);
+        log.info("Wallet unlinked count={} stakeAddress={} discordId={}", deletedCount, stakeAddress, discordId);
+        return deletedCount > 0;
+    }
+
+    @Transactional
+    public long deleteAllByDiscordId(String discordId) {
+        long deletedCount = Wallet.delete("discordId", discordId);
+        log.info("All wallets unlinked count={} discordId={}", deletedCount, discordId);
+        return deletedCount;
     }
 }
