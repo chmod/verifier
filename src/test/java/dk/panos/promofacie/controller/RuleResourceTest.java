@@ -159,6 +159,8 @@ class RuleResourceTest {
         criteria.traitValue = "trait-v";
         rule.addCriteria(criteria);
 
+        rule.maxQuantity = 50L;
+
         doReturn(List.of(rule)).when(resource).getExistingRules("123456");
 
         // Act
@@ -174,6 +176,7 @@ class RuleResourceTest {
         assertEquals("role-1", requestRule.roleId());
         assertEquals("policy-1", requestRule.policyId());
         assertEquals(5L, requestRule.minQuantity());
+        assertEquals(50L, requestRule.maxQuantity());
         assertEquals(1, requestRule.criteria().size());
         assertEquals("trait-k", requestRule.criteria().get(0).traitKey());
         assertEquals("trait-v", requestRule.criteria().get(0).traitValue());

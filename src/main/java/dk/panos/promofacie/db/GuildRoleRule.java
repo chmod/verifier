@@ -25,6 +25,9 @@ public class GuildRoleRule extends PanacheEntity {
     @Column(name = "min_quantity", nullable = false)
     public Long minQuantity = 1L;
 
+    @Column(name = "max_quantity")
+    public Long maxQuantity;
+
     @Column(name = "rule_group", nullable = false)
     public Integer ruleGroup = 1;
 

@@ -13,6 +13,9 @@ public record RuleRequest(
         @JsonProperty("minQuantity")
         Long minQuantity,
 
+        @JsonProperty("maxQuantity")
+        Long maxQuantity,
+
         @JsonProperty("criteria")
         List<CriteriaRequest> criteria,
 
@@ -23,10 +26,14 @@ public record RuleRequest(
         Boolean isAnd
 ) {
     public RuleRequest(String roleId, String policyId, Long minQuantity, List<CriteriaRequest> criteria) {
-        this(roleId, policyId, minQuantity, criteria, null, null);
+        this(roleId, policyId, minQuantity, null, criteria, null, null);
     }
 
     public RuleRequest(String roleId, String policyId, Long minQuantity, List<CriteriaRequest> criteria, Integer group) {
-        this(roleId, policyId, minQuantity, criteria, group, null);
+        this(roleId, policyId, minQuantity, null, criteria, group, null);
+    }
+
+    public RuleRequest(String roleId, String policyId, Long minQuantity, Long maxQuantity, List<CriteriaRequest> criteria, Integer group) {
+        this(roleId, policyId, minQuantity, maxQuantity, criteria, group, null);
     }
 }

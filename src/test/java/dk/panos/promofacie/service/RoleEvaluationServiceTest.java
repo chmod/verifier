@@ -197,4 +197,70 @@ class RoleEvaluationServiceTest {
         item4.traits = Map.of("Background", "GOLDEN", "Type", "robot");
         assertTrue(service.satisfiesCriteria(item4, rule));
     }
+
+    @Test
+    void testEvaluateRoleEligibilityTieredRoles() {
+        RoleEvaluationService service = spy(new RoleEvaluationService());
+
+        // Role X: min = 1, max = null (unbounded)
+        GuildRoleRule roleX = new GuildRoleRule();
+        roleX.id = 1L;
+        roleX.guildId = "guild-1";
+        roleX.roleId = "role-x";
+        roleX.policyId = "policy-y";
+        roleX.minQuantity = 1L;
+        roleX.maxQuantity = null;
+
+        // Role X': min = 100, max = 999 (tiered intermediate)
+        GuildRoleRule roleXPrime = new GuildRoleRule();
+        roleXPrime.id = 2L;
+        roleXPrime.guildId = "guild-1";
+        roleXPrime.roleId = "role-x-prime";
+        roleXPrime.policyId = "policy-y";
+        roleXPrime.minQuantity = 100L;
+        roleXPrime.maxQuantity = 999L;
+
+        // Role X'': min = 1000, max = null (high tier)
+        GuildRoleRule roleXDoublePrime = new GuildRoleRule();
+        roleXDoublePrime.id = 3L;
+        roleXDoublePrime.guildId = "guild-1";
+        roleXDoublePrime.roleId = "role-x-double-prime";
+        roleXDoublePrime.policyId = "policy-y";
+        roleXDoublePrime.minQuantity = 1000L;
+        roleXDoublePrime.maxQuantity = null;
+
+        doReturn(List.of(roleX)).when(service).getRulesForRole("guild-1", "role-x");
+        doReturn(List.of(roleXPrime)).when(service).getRulesForRole("guild-1", "role-x-prime");
+        doReturn(List.of(roleXDoublePrime)).when(service).getRulesForRole("guild-1", "role-x-double-prime");
+
+        // User has 1000 of policy-y
+        doReturn(1000L).when(service).getRuleMatchingQuantity("user-1", List.of("addr-1"), roleX);
+        doReturn(1000L).when(service).getRuleMatchingQuantity("user-1", List.of("addr-1"), roleXPrime);
+        doReturn(1000L).when(service).getRuleMatchingQuantity("user-1", List.of("addr-1"), roleXDoublePrime);
+
+        // Role X: 1000 >= 1 -> TRUE
+        assertTrue(service.evaluateRoleEligibility("user-1", List.of("addr-1"), "guild-1", "role-x"));
+
+        // Role X': 1000 > 999 max -> FALSE
+        assertFalse(service.evaluateRoleEligibility("user-1", List.of("addr-1"), "guild-1", "role-x-prime"));
+
+        // Role X'': 1000 >= 1000 -> TRUE
+        assertTrue(service.evaluateRoleEligibility("user-1", List.of("addr-1"), "guild-1", "role-x-double-prime"));
+    }
+
+    @Test
+    void testIsQuantityCompliantWithMaxQuantity() {
+        RoleEvaluationService service = new RoleEvaluationService();
+
+        // min 10, max 50
+        assertTrue(service.isQuantityCompliant(10, 10L, 50L));
+        assertTrue(service.isQuantityCompliant(30, 10L, 50L));
+        assertTrue(service.isQuantityCompliant(50, 10L, 50L));
+        assertFalse(service.isQuantityCompliant(9, 10L, 50L));
+        assertFalse(service.isQuantityCompliant(51, 10L, 50L));
+
+        // min 10, max null
+        assertTrue(service.isQuantityCompliant(1000, 10L, null));
+        assertFalse(service.isQuantityCompliant(5, 10L, null));
+    }
 }

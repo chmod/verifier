@@ -104,9 +104,9 @@ public class RoleEvaluationService {
                 boolean groupSatisfied = true;
                 for (GuildRoleRule rule : group) {
                     long ruleQty = getRuleMatchingQuantity(discordId, walletAddresses, rule);
-                    boolean ruleCompliant = ruleQty >= rule.minQuantity;
-                    log.info("[RoleEvaluation]     (AND Group) Rule id={} policy={} matchingQty={} (required={}) -> ruleCompliant={}",
-                            rule.id, rule.policyId, ruleQty, rule.minQuantity, ruleCompliant);
+                    boolean ruleCompliant = isQuantityCompliant(ruleQty, rule.minQuantity, rule.maxQuantity);
+                    log.info("[RoleEvaluation]     (AND Group) Rule id={} policy={} matchingQty={} (min={}, max={}) -> ruleCompliant={}",
+                            rule.id, rule.policyId, ruleQty, rule.minQuantity, rule.maxQuantity, ruleCompliant);
                     if (!ruleCompliant) {
                         groupSatisfied = false;
                     }
@@ -120,22 +120,26 @@ public class RoleEvaluationService {
             } else {
                 long groupTotalQty = 0;
                 long groupRequiredQty = 0;
+                Long groupMaxQty = null;
 
                 for (GuildRoleRule rule : group) {
                     long ruleQty = getRuleMatchingQuantity(discordId, walletAddresses, rule);
                     groupTotalQty += ruleQty;
-                    groupRequiredQty += rule.minQuantity;
-                    log.info("[RoleEvaluation]     (SUM Group) Rule id={} policy={} matchingQty={} -> groupTotalQty={}, groupRequiredQty={}",
-                            rule.id, rule.policyId, ruleQty, groupTotalQty, groupRequiredQty);
+                    groupRequiredQty += (rule.minQuantity != null ? rule.minQuantity : 1L);
+                    if (rule.maxQuantity != null) {
+                        groupMaxQty = (groupMaxQty == null) ? rule.maxQuantity : (groupMaxQty + rule.maxQuantity);
+                    }
+                    log.info("[RoleEvaluation]     (SUM Group) Rule id={} policy={} matchingQty={} -> groupTotalQty={}, groupRequiredQty={}, groupMaxQty={}",
+                            rule.id, rule.policyId, ruleQty, groupTotalQty, groupRequiredQty, groupMaxQty);
                 }
 
-                if (groupTotalQty >= groupRequiredQty) {
-                    log.info("[RoleEvaluation]   Rule group {} (SUM) satisfied! Total matching quantity {} meets required quantity {}",
-                            groupId, groupTotalQty, groupRequiredQty);
+                if (isQuantityCompliant(groupTotalQty, groupRequiredQty, groupMaxQty)) {
+                    log.info("[RoleEvaluation]   Rule group {} (SUM) satisfied! Total matching quantity {} meets required min {} / max {}",
+                            groupId, groupTotalQty, groupRequiredQty, groupMaxQty);
                     return true; // Satisfied one of the OR pathways
                 } else {
-                    log.info("[RoleEvaluation]   Rule group {} (SUM) NOT satisfied! Total matching quantity {} is less than required quantity {}",
-                            groupId, groupTotalQty, groupRequiredQty);
+                    log.info("[RoleEvaluation]   Rule group {} (SUM) NOT satisfied! Total matching quantity {} does not meet required min {} / max {}",
+                            groupId, groupTotalQty, groupRequiredQty, groupMaxQty);
                 }
             }
         }
@@ -216,12 +220,19 @@ public class RoleEvaluationService {
         }
     }
 
+    public boolean isQuantityCompliant(long quantity, Long minQuantity, Long maxQuantity) {
+        long min = minQuantity != null ? minQuantity : 1L;
+        boolean meetsMin = quantity >= min;
+        boolean meetsMax = (maxQuantity == null) || (quantity <= maxQuantity);
+        return meetsMin && meetsMax;
+    }
+
     @Transactional
     public boolean evaluateRuleCompliance(String discordId, List<String> walletAddresses, GuildRoleRule rule) {
         long matchingQuantity = getRuleMatchingQuantity(discordId, walletAddresses, rule);
-        boolean result = matchingQuantity >= rule.minQuantity;
-        log.info("[RoleEvaluation]   Evaluation Result for user {} / policy {}: matchingQty={} (required={}) -> meetsRule={}",
-                discordId, rule.policyId, matchingQuantity, rule.minQuantity, result);
+        boolean result = isQuantityCompliant(matchingQuantity, rule.minQuantity, rule.maxQuantity);
+        log.info("[RoleEvaluation]   Evaluation Result for user {} / policy {}: matchingQty={} (min={}, max={}) -> meetsRule={}",
+                discordId, rule.policyId, matchingQuantity, rule.minQuantity, rule.maxQuantity, result);
         return result;
     }
 

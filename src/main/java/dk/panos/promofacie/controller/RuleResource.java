@@ -129,6 +129,7 @@ public class RuleResource {
             rule.roleId = ruleReq.roleId();
             rule.policyId = ruleReq.policyId();
             rule.minQuantity = ruleReq.minQuantity() != null ? ruleReq.minQuantity() : 1L;
+            rule.maxQuantity = ruleReq.maxQuantity();
             rule.ruleGroup = ruleReq.group() != null ? ruleReq.group() : autoGroupBase++;
             rule.isAnd = ruleReq.isAnd() != null ? ruleReq.isAnd() : false;
 
@@ -262,6 +263,7 @@ public class RuleResource {
                             rule.roleId,
                             rule.policyId,
                             rule.minQuantity,
+                            rule.maxQuantity,
                             criteriaList,
                             responseGroup,
                             rule.isAnd);
