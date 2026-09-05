@@ -14,12 +14,17 @@ public class WalletPersistenceService {
 
     @Transactional
     public void persist(String stakeAddress, String discordId) {
+        persist(stakeAddress, discordId, Chain.CARDANO);
+    }
+
+    @Transactional
+    public void persist(String address, String discordId, Chain chain) {
         Wallet wallet = new Wallet();
-        wallet.setAddress(stakeAddress);
+        wallet.setAddress(address);
         wallet.setDiscordId(discordId);
-        wallet.setChain(Chain.CARDANO);
+        wallet.setChain(chain != null ? chain : Chain.CARDANO);
         wallet.persist();
-        log.info("Wallet persisted stakeAddress={} discordId={}", stakeAddress, discordId);
+        log.info("Wallet persisted address={} discordId={} chain={}", address, discordId, wallet.getChain());
     }
 
     public List<Wallet> findByDiscordId(String discordId) {

@@ -3,6 +3,7 @@ package dk.panos.promofacie.controller;
 import dk.panos.promofacie.controller.model.NonceEntry;
 import dk.panos.promofacie.controller.model.VerifyRequest;
 import dk.panos.promofacie.controller.model.WalletAssociationResponse;
+import dk.panos.promofacie.db.Chain;
 import dk.panos.promofacie.db.Wallet;
 import dk.panos.promofacie.db.WalletPersistenceService;
 import dk.panos.promofacie.kafka.model.TrackingCommand;
@@ -23,7 +24,11 @@ import org.eclipse.microprofile.reactive.messaging.Channel;
 import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.web3j.crypto.Keys;
+import org.web3j.crypto.Sign;
 
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.HexFormat;
@@ -42,6 +47,10 @@ public class WalletVerificationResource {
     @Inject
     @Channel("wallet-tracking-out")
     Emitter<TrackingCommand> walletTrackingEmitter;
+
+    @Inject
+    @Channel("robinhood-tracking-out")
+    Emitter<TrackingCommand> robinhoodTrackingEmitter;
 
     @Inject
     WalletPersistenceService walletPersistenceService;
@@ -66,26 +75,65 @@ public class WalletVerificationResource {
     @Path("/verify")
     public Response verify(VerifyRequest req) {
         String discordId = jwt.getClaim("discord_id");
+        log.info("Verify endpoint called: discordId={}, req={}", discordId, req);
 
         NonceEntry entry = nonces.remove(discordId);
         if (entry == null || entry.isExpired())
             return Response.status(400).entity(Map.of("message", "Nonce missing or expired")).build();
 
-        if (!verifyWalletOwnership(req.stakeAddress(), req.signature(), req.key(), entry.nonce()))
+        String resolvedAddress = req.getResolvedAddress();
+        if (resolvedAddress == null || resolvedAddress.isBlank()) {
+            return Response.status(400).entity(Map.of("message", "Wallet address is required")).build();
+        }
+
+        boolean isRobinhood = "ROBINHOOD".equalsIgnoreCase(req.chain())
+                || resolvedAddress.startsWith("0x")
+                || resolvedAddress.startsWith("0X");
+
+        boolean verified;
+        if (isRobinhood) {
+            verified = verifyEvmWalletOwnership(resolvedAddress, req.signature(), entry.nonce());
+        } else {
+            verified = verifyWalletOwnership(resolvedAddress, req.signature(), req.key(), entry.nonce());
+        }
+
+        if (!verified) {
             return Response.status(400).entity(Map.of("message", "Signature verification failed")).build();
-        log.info("Signature verification successful for stakeAddress={} and discordId={}", req.stakeAddress(), discordId);
+        }
 
-        walletTrackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, req.stakeAddress(), null))
-                .whenComplete((result, ex) -> {
-                    if (ex != null) {
-                        log.error("Failed to send tracking command stakeAddress={}: {}", req.stakeAddress(), ex.getMessage(), ex);
-                    } else {
-                        log.info("Successfully sent ADD_ADDRESS tracking command to Kafka for stakeAddress: {}", req.stakeAddress());
-                        walletPersistenceService.persist(req.stakeAddress(), discordId);
-                    }
-                });
+        Chain targetChain = isRobinhood ? Chain.ROBINHOOD : Chain.CARDANO;
+        log.info("Signature verification successful for address={} discordId={} chain={}", 
+                resolvedAddress, discordId, targetChain);
 
-        return Response.ok(Map.of("discordId", discordId, "stakeAddress", req.stakeAddress())).build();
+        TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, resolvedAddress, null);
+        if (isRobinhood) {
+            robinhoodTrackingEmitter.send(cmd)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.error("Failed to send tracking command to robinhood address={}: {}", resolvedAddress, ex.getMessage(), ex);
+                        } else {
+                            log.info("Successfully sent ADD_ADDRESS tracking command to robinhood for address: {}", resolvedAddress);
+                            walletPersistenceService.persist(resolvedAddress, discordId, targetChain);
+                        }
+                    });
+        } else {
+            walletTrackingEmitter.send(cmd)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.error("Failed to send tracking command to cardano stakeAddress={}: {}", resolvedAddress, ex.getMessage(), ex);
+                        } else {
+                            log.info("Successfully sent ADD_ADDRESS tracking command to cardano for stakeAddress: {}", resolvedAddress);
+                            walletPersistenceService.persist(resolvedAddress, discordId, targetChain);
+                        }
+                    });
+        }
+
+        return Response.ok(Map.of(
+                "discordId", discordId, 
+                "stakeAddress", resolvedAddress, 
+                "address", resolvedAddress, 
+                "chain", targetChain.name()
+        )).build();
     }
 
     @GET
@@ -114,7 +162,10 @@ public class WalletVerificationResource {
 
     @DELETE
     @Path("/association")
-    public Response deleteAssociation(@QueryParam("stakeAddress") String stakeAddress) {
+    public Response deleteAssociation(
+            @QueryParam("stakeAddress") String stakeAddress,
+            @QueryParam("address") String address
+    ) {
         String discordId = jwt.getClaim("discord_id");
         if (discordId == null || discordId.isBlank()) {
             return Response.status(Response.Status.UNAUTHORIZED)
@@ -122,40 +173,120 @@ public class WalletVerificationResource {
                     .build();
         }
 
-        if (stakeAddress != null && !stakeAddress.isBlank()) {
-            Wallet wallet = walletPersistenceService.findByAddressAndDiscordId(stakeAddress, discordId);
+        String targetAddress = (address != null && !address.isBlank()) ? address : stakeAddress;
+
+        if (targetAddress != null && !targetAddress.isBlank()) {
+            Wallet wallet = walletPersistenceService.findByAddressAndDiscordId(targetAddress, discordId);
             if (wallet == null) {
                 return Response.status(Response.Status.NOT_FOUND)
                         .entity(Map.of("message", "Wallet association not found"))
                         .build();
             }
 
-            walletTrackingEmitter.send(new TrackingCommand(TrackingCommand.Action.REMOVE_ADDRESS, stakeAddress, null))
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to send REMOVE_ADDRESS command for stakeAddress={}: {}", stakeAddress, ex.getMessage(), ex);
-                        } else {
-                            log.info("Successfully sent REMOVE_ADDRESS command to Kafka for stakeAddress: {}", stakeAddress);
-                        }
-                    });
-
-            walletPersistenceService.deleteByAddressAndDiscordId(stakeAddress, discordId);
-            return Response.ok(Map.of("message", "Wallet association unlinked successfully")).build();
-        } else {
-            List<Wallet> wallets = walletPersistenceService.findByDiscordId(discordId);
-            for (Wallet w : wallets) {
-                walletTrackingEmitter.send(new TrackingCommand(TrackingCommand.Action.REMOVE_ADDRESS, w.getAddress(), null))
+            TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.REMOVE_ADDRESS, targetAddress, null);
+            if (wallet.getChain() == Chain.ROBINHOOD) {
+                robinhoodTrackingEmitter.send(cmd)
                         .whenComplete((result, ex) -> {
                             if (ex != null) {
-                                log.error("Failed to send REMOVE_ADDRESS command for stakeAddress={}: {}", w.getAddress(), ex.getMessage(), ex);
+                                log.error("Failed to send REMOVE_ADDRESS to robinhood for address={}: {}", targetAddress, ex.getMessage(), ex);
                             } else {
-                                log.info("Successfully sent REMOVE_ADDRESS command to Kafka for stakeAddress: {}", w.getAddress());
+                                log.info("Successfully sent REMOVE_ADDRESS to robinhood for address: {}", targetAddress);
+                            }
+                        });
+            } else {
+                walletTrackingEmitter.send(cmd)
+                        .whenComplete((result, ex) -> {
+                            if (ex != null) {
+                                log.error("Failed to send REMOVE_ADDRESS to cardano for stakeAddress={}: {}", targetAddress, ex.getMessage(), ex);
+                            } else {
+                                log.info("Successfully sent REMOVE_ADDRESS to cardano for stakeAddress: {}", targetAddress);
                             }
                         });
             }
 
+            walletPersistenceService.deleteByAddressAndDiscordId(targetAddress, discordId);
+            return Response.ok(Map.of("message", "Wallet association unlinked successfully")).build();
+        } else {
+            List<Wallet> wallets = walletPersistenceService.findByDiscordId(discordId);
+            for (Wallet w : wallets) {
+                TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.REMOVE_ADDRESS, w.getAddress(), null);
+                if (w.getChain() == Chain.ROBINHOOD) {
+                    robinhoodTrackingEmitter.send(cmd)
+                            .whenComplete((result, ex) -> {
+                                if (ex != null) {
+                                    log.error("Failed to send REMOVE_ADDRESS to robinhood for address={}: {}", w.getAddress(), ex.getMessage(), ex);
+                                } else {
+                                    log.info("Successfully sent REMOVE_ADDRESS to robinhood for address: {}", w.getAddress());
+                                }
+                            });
+                } else {
+                    walletTrackingEmitter.send(cmd)
+                            .whenComplete((result, ex) -> {
+                                if (ex != null) {
+                                    log.error("Failed to send REMOVE_ADDRESS to cardano for stakeAddress={}: {}", w.getAddress(), ex.getMessage(), ex);
+                                } else {
+                                    log.info("Successfully sent REMOVE_ADDRESS to cardano for stakeAddress: {}", w.getAddress());
+                                }
+                            });
+                }
+            }
+
             long deletedCount = walletPersistenceService.deleteAllByDiscordId(discordId);
             return Response.ok(Map.of("message", "All wallet associations unlinked successfully", "count", deletedCount)).build();
+        }
+    }
+
+    public boolean verifyEvmWalletOwnership(String address, String signature, String nonce) {
+        try {
+            if (address == null || signature == null || nonce == null) {
+                log.warn("EVM verify missing parameters: address={}, hasSig={}, hasNonce={}", 
+                        address, signature != null, nonce != null);
+                return false;
+            }
+            String cleanSig = signature.startsWith("0x") ? signature.substring(2) : signature;
+            if (cleanSig.length() != 130) {
+                log.warn("Invalid EVM signature length: expected 130 hex chars, got {}", cleanSig.length());
+                return false;
+            }
+
+            byte[] r = HexFormat.of().parseHex(cleanSig.substring(0, 64));
+            byte[] s = HexFormat.of().parseHex(cleanSig.substring(64, 128));
+            byte v = (byte) Integer.parseInt(cleanSig.substring(128, 130), 16);
+            if (v < 27) {
+                v += 27;
+            }
+
+            Sign.SignatureData sigData = new Sign.SignatureData(v, r, s);
+
+            // 1. Try UTF-8 bytes of nonce string
+            byte[] messageBytes = nonce.getBytes(StandardCharsets.UTF_8);
+            BigInteger publicKey = Sign.signedPrefixedMessageToKey(messageBytes, sigData);
+            String recoveredAddress = "0x" + Keys.getAddress(publicKey);
+
+            boolean match = recoveredAddress.equalsIgnoreCase(address.trim());
+
+            // 2. If not matched, try raw parsed hex bytes if nonce is a hex string
+            if (!match) {
+                try {
+                    String cleanNonce = nonce.startsWith("0x") ? nonce.substring(2) : nonce;
+                    if (cleanNonce.length() % 2 == 0) {
+                        byte[] rawBytes = HexFormat.of().parseHex(cleanNonce);
+                        BigInteger pk2 = Sign.signedPrefixedMessageToKey(rawBytes, sigData);
+                        String recovered2 = "0x" + Keys.getAddress(pk2);
+                        if (recovered2.equalsIgnoreCase(address.trim())) {
+                            match = true;
+                            recoveredAddress = recovered2;
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+
+            log.info("EVM verify result: match={}, recovered={}, expected={}", match, recoveredAddress, address);
+            return match;
+        } catch (Exception e) {
+            log.error("EVM signature verification failed for address={}", address, e);
+            return false;
         }
     }
 
