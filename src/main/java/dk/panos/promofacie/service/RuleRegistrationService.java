@@ -18,22 +18,42 @@ public class RuleRegistrationService {
     @Channel("wallet-tracking-out")
     Emitter<TrackingCommand> trackingEmitter;
 
+    @Inject
+    @Channel("robinhood-tracking-out")
+    Emitter<TrackingCommand> robinhoodTrackingEmitter;
+
     @Transactional
     public void registerRuleAndSync(GuildRoleRule rule) {
-        log.info("[RuleRegistration] Registering rule for guild={}, policy={}, role={}",
-                rule.guildId, rule.policyId, rule.roleId);
+        log.info("[RuleRegistration] Registering rule for guild={}, policy={}, role={}, chain={}",
+                rule.guildId, rule.policyId, rule.roleId, rule.getResolvedChain());
 
         rule.persist();
 
-        // Broadcast ADD_POLICY to Cardano indexer so it tracks this policy for future blocks
-        trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, rule.policyId))
-                .whenComplete((result, ex) -> {
-                    if (ex != null) {
-                        log.error("[RuleRegistration] Failed to send ADD_POLICY for policy={}", rule.policyId, ex);
-                    } else {
-                        log.info("[RuleRegistration] Successfully sent ADD_POLICY for policy={}", rule.policyId);
-                    }
-                });
+        // Broadcast ADD_POLICY to appropriate indexer (Ponder for Robinhood, Yaci for Cardano)
+        boolean isRobinhood = rule.getResolvedChain() == dk.panos.promofacie.db.Chain.ROBINHOOD;
+        TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, rule.policyId);
+
+        if (isRobinhood && robinhoodTrackingEmitter != null) {
+            log.info("[RuleRegistration] Broadcasting ADD_POLICY to robinhood for policy={}", rule.policyId);
+            robinhoodTrackingEmitter.send(cmd)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.error("[RuleRegistration] Failed to send ADD_POLICY to robinhood for policy={}", rule.policyId, ex);
+                        } else {
+                            log.info("[RuleRegistration] Successfully sent ADD_POLICY to robinhood for policy={}", rule.policyId);
+                        }
+                    });
+        } else if (trackingEmitter != null) {
+            log.info("[RuleRegistration] Broadcasting ADD_POLICY to cardano for policy={}", rule.policyId);
+            trackingEmitter.send(cmd)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.error("[RuleRegistration] Failed to send ADD_POLICY to cardano for policy={}", rule.policyId, ex);
+                        } else {
+                            log.info("[RuleRegistration] Successfully sent ADD_POLICY to cardano for policy={}", rule.policyId);
+                        }
+                    });
+        }
 
         // Enqueue local rule re-evaluation task for the scheduler
         dk.panos.promofacie.db.PendingRuleEvaluation pending = new dk.panos.promofacie.db.PendingRuleEvaluation();
@@ -52,20 +72,35 @@ public class RuleRegistrationService {
         GuildRoleRule rule = GuildRoleRule.findById(ruleId);
         if (rule != null) {
             String policyId = rule.policyId;
+            boolean isRobinhood = rule.getResolvedChain() == dk.panos.promofacie.db.Chain.ROBINHOOD;
             rule.delete();
             
             // Check if any other rules exist for this policyId
             long count = GuildRoleRule.count("policyId = ?1", policyId);
             if (count == 0) {
                 log.info("[RuleRegistration] No rules remaining for policyId={} — broadcasting REMOVE_POLICY", policyId);
-                trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.REMOVE_POLICY, null, policyId))
-                        .whenComplete((result, ex) -> {
-                            if (ex != null) {
-                                log.error("[RuleRegistration] Failed to send REMOVE_POLICY for policy={}", policyId, ex);
-                            } else {
-                                log.info("[RuleRegistration] Successfully sent REMOVE_POLICY for policy={}", policyId);
-                            }
-                        });
+                TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.REMOVE_POLICY, null, policyId);
+                if (isRobinhood && robinhoodTrackingEmitter != null) {
+                    log.info("[RuleRegistration] Broadcasting REMOVE_POLICY to robinhood for policy={}", policyId);
+                    robinhoodTrackingEmitter.send(cmd)
+                            .whenComplete((result, ex) -> {
+                                if (ex != null) {
+                                    log.error("[RuleRegistration] Failed to send REMOVE_POLICY to robinhood for policy={}", policyId, ex);
+                                } else {
+                                    log.info("[RuleRegistration] Successfully sent REMOVE_POLICY to robinhood for policy={}", policyId);
+                                }
+                            });
+                } else if (trackingEmitter != null) {
+                    log.info("[RuleRegistration] Broadcasting REMOVE_POLICY to cardano for policy={}", policyId);
+                    trackingEmitter.send(cmd)
+                            .whenComplete((result, ex) -> {
+                                if (ex != null) {
+                                    log.error("[RuleRegistration] Failed to send REMOVE_POLICY to cardano for policy={}", policyId, ex);
+                                } else {
+                                    log.info("[RuleRegistration] Successfully sent REMOVE_POLICY to cardano for policy={}", policyId);
+                                }
+                            });
+                }
             }
         }
     }

@@ -34,6 +34,18 @@ public class GuildRoleRule extends PanacheEntity {
     @Column(name = "is_and", nullable = false)
     public Boolean isAnd = false;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "chain")
+    public Chain chain = Chain.CARDANO;
+
+    public Chain getResolvedChain() {
+        if (chain != null) return chain;
+        if (policyId != null && (policyId.startsWith("0x") || policyId.startsWith("0X"))) {
+            return Chain.ROBINHOOD;
+        }
+        return Chain.CARDANO;
+    }
+
     @OneToMany(mappedBy = "rule", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     public List<RuleTraitCriteria> criteria = new ArrayList<>();
 
