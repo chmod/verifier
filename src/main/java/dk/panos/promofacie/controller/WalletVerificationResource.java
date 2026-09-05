@@ -236,6 +236,10 @@ public class WalletVerificationResource {
         }
     }
 
+    public Response deleteAssociation(String stakeAddress) {
+        return deleteAssociation(stakeAddress, null);
+    }
+
     public boolean verifyEvmWalletOwnership(String address, String signature, String nonce) {
         try {
             if (address == null || signature == null || nonce == null) {
