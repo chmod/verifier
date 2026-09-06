@@ -3,6 +3,7 @@ package dk.panos.promofacie.service;
 import dk.panos.promofacie.db.Notification;
 import dk.panos.promofacie.db.NotificationChannel;
 import dk.panos.promofacie.kafka.model.TransactionMessage;
+import dk.panos.promofacie.service.model.PolicyInfo;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -189,9 +190,12 @@ public class DiscordNotificationService {
                     .expiresIn(Duration.of(1, ChronoUnit.HOURS))
                     .signWithSecret(secret);
 
-            Map<String, String> policies = dashboardApiClient.fetchPolicies("Bearer " + jwt);
+            Map<String, PolicyInfo> policies = dashboardApiClient.fetchPolicies("Bearer " + jwt);
             if (policies != null && policies.containsKey(policyId)) {
-                return policies.get(policyId);
+                PolicyInfo info = policies.get(policyId);
+                if (info != null && info.friendlyName() != null && !info.friendlyName().isBlank()) {
+                    return info.friendlyName();
+                }
             }
         } catch (Exception e) {
             log.error("Failed to resolve policy name for policy ID: {}", policyId, e);
