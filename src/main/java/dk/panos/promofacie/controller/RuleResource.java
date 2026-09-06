@@ -32,10 +32,6 @@ public class RuleResource {
     Emitter<TrackingCommand> trackingEmitter;
 
     @Inject
-    @Channel("robinhood-tracking-out")
-    Emitter<TrackingCommand> robinhoodTrackingEmitter;
-
-    @Inject
     net.dv8tion.jda.api.JDA jda;
 
     @POST
@@ -132,7 +128,6 @@ public class RuleResource {
             rule.guildId = guild;
             rule.roleId = ruleReq.roleId();
             rule.policyId = ruleReq.policyId();
-            rule.chain = ruleReq.getResolvedChain();
             rule.minQuantity = ruleReq.minQuantity() != null ? ruleReq.minQuantity() : 1L;
             rule.maxQuantity = ruleReq.maxQuantity();
             rule.ruleGroup = ruleReq.group() != null ? ruleReq.group() : autoGroupBase++;
@@ -162,29 +157,15 @@ public class RuleResource {
 
         // 6. Broadcast Kafka messages for policy updates
         for (String policyId : policyAdds) {
-            boolean isRobinhood = isRobinhoodPolicy(policyId, newRulesList, existingRules);
-            TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, policyId);
-            if (isRobinhood && robinhoodTrackingEmitter != null) {
-                log.info("[RuleResource] Broadcasting ADD_POLICY to robinhood for policyId={}", policyId);
-                robinhoodTrackingEmitter.send(cmd)
-                        .whenComplete((res, ex) -> {
-                            if (ex != null) {
-                                log.error("[RuleResource] Failed to send ADD_POLICY to robinhood for policyId={}", policyId, ex);
-                            } else {
-                                log.info("[RuleResource] Successfully sent ADD_POLICY to robinhood for policyId={}", policyId);
-                            }
-                        });
-            } else if (trackingEmitter != null) {
-                log.info("[RuleResource] Broadcasting ADD_POLICY to cardano for policyId={}", policyId);
-                trackingEmitter.send(cmd)
-                        .whenComplete((res, ex) -> {
-                            if (ex != null) {
-                                log.error("[RuleResource] Failed to send ADD_POLICY to cardano for policyId={}", policyId, ex);
-                            } else {
-                                log.info("[RuleResource] Successfully sent ADD_POLICY to cardano for policyId={}", policyId);
-                            }
-                        });
-            }
+            log.info("[RuleResource] Broadcasting ADD_POLICY tracking command for policyId={}", policyId);
+            trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, policyId))
+                    .whenComplete((res, ex) -> {
+                        if (ex != null) {
+                            log.error("[RuleResource] Failed to send ADD_POLICY for policyId={}", policyId, ex);
+                        } else {
+                            log.info("[RuleResource] Successfully sent ADD_POLICY for policyId={}", policyId);
+                        }
+                    });
         }
 
         if (!policyAdds.isEmpty() && jda != null) {
@@ -198,32 +179,19 @@ public class RuleResource {
                             .toList();
                     log.info("[RuleResource] Found {} guild member(s) in JDA cache for guild {}", memberIds.size(), guild);
                     if (!memberIds.isEmpty()) {
-                        // Find all verified addresses of these guild members
+                        // Find all verified Cardano addresses of these guild members
                         List<dk.panos.promofacie.db.Wallet> wallets = getWalletsForDiscordIds(memberIds);
                         log.info("[RuleResource] Found {} verified wallet(s) for the members of guild {}", wallets.size(), guild);
                         for (dk.panos.promofacie.db.Wallet wallet : wallets) {
-                            TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null);
-                            if (wallet.getChain() == dk.panos.promofacie.db.Chain.ROBINHOOD && robinhoodTrackingEmitter != null) {
-                                log.info("[RuleResource] Broadcasting ADD_ADDRESS to robinhood for address={}", wallet.getAddress());
-                                robinhoodTrackingEmitter.send(cmd)
-                                        .whenComplete((res, ex) -> {
-                                            if (ex != null) {
-                                                log.error("[RuleResource] Failed to broadcast ADD_ADDRESS to robinhood for address={}", wallet.getAddress(), ex);
-                                            } else {
-                                                log.info("[RuleResource] Successfully sent ADD_ADDRESS to robinhood for address: {}", wallet.getAddress());
-                                            }
-                                        });
-                            } else if (trackingEmitter != null) {
-                                log.info("[RuleResource] Broadcasting ADD_ADDRESS to cardano for stakeAddress={}", wallet.getAddress());
-                                trackingEmitter.send(cmd)
-                                        .whenComplete((res, ex) -> {
-                                            if (ex != null) {
-                                                log.error("[RuleResource] Failed to broadcast ADD_ADDRESS to cardano for stakeAddress={}", wallet.getAddress(), ex);
-                                            } else {
-                                                log.info("[RuleResource] Successfully sent ADD_ADDRESS to cardano for stakeAddress: {}", wallet.getAddress());
-                                            }
-                                        });
-                            }
+                            log.info("[RuleResource] Broadcasting ADD_ADDRESS to trigger sync for stakeAddress={}", wallet.getAddress());
+                            trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null))
+                                    .whenComplete((res, ex) -> {
+                                        if (ex != null) {
+                                            log.error("[RuleResource] Failed to broadcast ADD_ADDRESS for stakeAddress={}", wallet.getAddress(), ex);
+                                        } else {
+                                            log.info("[RuleResource] Successfully sent ADD_ADDRESS for stakeAddress={}", wallet.getAddress());
+                                        }
+                                    });
                         }
                     }
                 } else {
@@ -235,29 +203,15 @@ public class RuleResource {
         }
 
         for (String policyId : policyRemovals) {
-            boolean isRobinhood = isRobinhoodPolicy(policyId, newRulesList, existingRules);
-            TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.REMOVE_POLICY, null, policyId);
-            if (isRobinhood && robinhoodTrackingEmitter != null) {
-                log.info("[RuleResource] Broadcasting REMOVE_POLICY to robinhood for policyId={}", policyId);
-                robinhoodTrackingEmitter.send(cmd)
-                        .whenComplete((res, ex) -> {
-                            if (ex != null) {
-                                log.error("[RuleResource] Failed to send REMOVE_POLICY to robinhood for policyId={}", policyId, ex);
-                            } else {
-                                log.info("[RuleResource] Successfully sent REMOVE_POLICY to robinhood for policyId={}", policyId);
-                            }
-                        });
-            } else if (trackingEmitter != null) {
-                log.info("[RuleResource] Broadcasting REMOVE_POLICY to cardano for policyId={}", policyId);
-                trackingEmitter.send(cmd)
-                        .whenComplete((res, ex) -> {
-                            if (ex != null) {
-                                log.error("[RuleResource] Failed to send REMOVE_POLICY to cardano for policyId={}", policyId, ex);
-                            } else {
-                                log.info("[RuleResource] Successfully sent REMOVE_POLICY to cardano for policyId={}", policyId);
-                            }
-                        });
-            }
+            log.info("[RuleResource] Broadcasting REMOVE_POLICY tracking command for policyId={}", policyId);
+            trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.REMOVE_POLICY, null, policyId))
+                    .whenComplete((res, ex) -> {
+                        if (ex != null) {
+                            log.error("[RuleResource] Failed to send REMOVE_POLICY for policyId={}", policyId, ex);
+                        } else {
+                            log.info("[RuleResource] Successfully sent REMOVE_POLICY for policyId={}", policyId);
+                        }
+                    });
         }
 
         // 7. Return 200 OK with the diff response
@@ -266,26 +220,6 @@ public class RuleResource {
                 new RuleUpdateResponse.RolesDiff(rolesApplying, rolesRemove));
 
         return Response.ok(responseBody).build();
-    }
-
-    private boolean isRobinhoodPolicy(String policyId, List<RuleRequest> newRules, List<GuildRoleRule> existingRules) {
-        if (policyId == null) return false;
-        if (policyId.startsWith("0x") || policyId.startsWith("0X")) return true;
-        if (newRules != null) {
-            for (RuleRequest req : newRules) {
-                if (policyId.equalsIgnoreCase(req.policyId()) && req.getResolvedChain() == dk.panos.promofacie.db.Chain.ROBINHOOD) {
-                    return true;
-                }
-            }
-        }
-        if (existingRules != null) {
-            for (GuildRoleRule rule : existingRules) {
-                if (policyId.equalsIgnoreCase(rule.policyId) && rule.getResolvedChain() == dk.panos.promofacie.db.Chain.ROBINHOOD) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     @GET
@@ -325,7 +259,6 @@ public class RuleResource {
                             .getOrDefault(rule.ruleGroup, 0L);
                     Integer responseGroup = count > 1 ? rule.ruleGroup : null;
 
-                    String chainName = rule.chain != null ? rule.chain.name() : (rule.policyId != null && rule.policyId.startsWith("0x") ? "ROBINHOOD" : "CARDANO");
                     return new RuleRequest(
                             rule.roleId,
                             rule.policyId,
@@ -333,9 +266,7 @@ public class RuleResource {
                             rule.maxQuantity,
                             criteriaList,
                             responseGroup,
-                            rule.isAnd,
-                            chainName,
-                            chainName);
+                            rule.isAnd);
                 })
                 .collect(Collectors.toList());
 
