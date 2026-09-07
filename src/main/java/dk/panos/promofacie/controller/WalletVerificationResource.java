@@ -62,19 +62,33 @@ public class WalletVerificationResource {
     public Response challenge() {
         log.info("Challenge requested");
         String discordId = jwt.getClaim("discord_id");
+        if (discordId == null || discordId.isBlank()) {
+            return Response.status(Response.Status.UNAUTHORIZED)
+                    .entity(Map.of("message", "Missing or invalid discord_id claim"))
+                    .build();
+        }
         log.info("Discord ID: {}", discordId);
-        byte[] bytes = new byte[32];
+        byte[] bytes = new byte[16];
         new SecureRandom().nextBytes(bytes);
-        String nonce = HexFormat.of().formatHex(bytes);
-        nonces.put(discordId, new NonceEntry(nonce, Instant.now().plusSeconds(300)));
-        log.info("Nonce: {}", nonce);
-        return Response.ok(Map.of("nonce", nonce)).build();
+        String rawNonce = HexFormat.of().formatHex(bytes);
+        String challengeMessage = String.format(
+                "Promofacie Wallet Verification\nDiscord ID: %s\nNonce: %s\nIssued At: %d",
+                discordId, rawNonce, Instant.now().getEpochSecond()
+        );
+        nonces.put(discordId, new NonceEntry(challengeMessage, Instant.now().plusSeconds(300)));
+        log.info("Generated challenge message for discordId={}", discordId);
+        return Response.ok(Map.of("nonce", challengeMessage)).build();
     }
 
     @POST
     @Path("/verify")
     public Response verify(VerifyRequest req) {
         String discordId = jwt.getClaim("discord_id");
+        if (discordId == null || discordId.isBlank()) {
+            return Response.status(Response.Status.UNAUTHORIZED)
+                    .entity(Map.of("message", "Missing or invalid discord_id claim"))
+                    .build();
+        }
         log.info("Verify endpoint called: discordId={}, req={}", discordId, req);
 
         NonceEntry entry = nonces.remove(discordId);
@@ -105,6 +119,10 @@ public class WalletVerificationResource {
         log.info("Signature verification successful for address={} discordId={} chain={}", 
                 resolvedAddress, discordId, targetChain);
 
+        // 1. Synchronously persist or reassign in database
+        walletPersistenceService.persist(resolvedAddress, discordId, targetChain);
+
+        // 2. Broadcast tracking command to Kafka
         TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, resolvedAddress, null);
         if (isRobinhood) {
             robinhoodTrackingEmitter.send(cmd)
@@ -113,7 +131,6 @@ public class WalletVerificationResource {
                             log.error("Failed to send tracking command to robinhood address={}: {}", resolvedAddress, ex.getMessage(), ex);
                         } else {
                             log.info("Successfully sent ADD_ADDRESS tracking command to robinhood for address: {}", resolvedAddress);
-                            walletPersistenceService.persist(resolvedAddress, discordId, targetChain);
                         }
                     });
         } else {
@@ -123,11 +140,11 @@ public class WalletVerificationResource {
                             log.error("Failed to send tracking command to cardano stakeAddress={}: {}", resolvedAddress, ex.getMessage(), ex);
                         } else {
                             log.info("Successfully sent ADD_ADDRESS tracking command to cardano for stakeAddress: {}", resolvedAddress);
-                            walletPersistenceService.persist(resolvedAddress, discordId, targetChain);
                         }
                     });
         }
 
+        // 3. Return 200 OK only after DB record is committed
         return Response.ok(Map.of(
                 "discordId", discordId, 
                 "stakeAddress", resolvedAddress, 

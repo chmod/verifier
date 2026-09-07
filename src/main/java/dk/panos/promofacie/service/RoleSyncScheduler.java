@@ -11,6 +11,8 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Role;
+import net.dv8tion.jda.api.exceptions.ErrorResponseException;
+import net.dv8tion.jda.api.requests.ErrorResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -106,8 +108,16 @@ public class RoleSyncScheduler {
                     member = guild.retrieveMemberById(discordId).complete();
                     log.info("[RoleSyncScheduler] Member {} successfully retrieved from Discord API for guild {}", discordId, guildId);
                 } catch (Exception e) {
-                    // Member may genuinely have left, or this may be transient gateway lag.
-                    // Route through the retry path rather than an immediate terminal failure.
+                    // If the member left the server or does not exist (Discord Error 10007: Unknown Member / 10013: Unknown User),
+                    // retrying is useless and will only spam Discord API and outbox logs. Fail immediately.
+                    if (isTerminalMemberNotFound(e)) {
+                        log.warn("[RoleSyncScheduler] Member {} does not exist in guild {} (terminal Discord 404: Unknown Member/User) — marking task(s) FAILED without retry.",
+                                discordId, guildId);
+                        markTasksFailed(tasks, "member not found (terminal): " + e.getMessage());
+                        return;
+                    }
+
+                    // For transient network issues / gateway lag, route through retry path
                     log.warn("[RoleSyncScheduler] Member {} retrieve from Discord API failed in guild {} — routing to retry. Reason: {}",
                             discordId, guildId, e.getMessage());
                     handleGroupFailure(tasks, "member not found: " + e.getMessage());
@@ -296,5 +306,42 @@ public class RoleSyncScheduler {
             managedTask.updatedAt = Instant.now();
             managedTask.persist();
         }
+    }
+
+    /**
+     * Determines whether an exception indicates the member or user does not exist on Discord
+     * (Discord HTTP 404 / 10007: Unknown Member / 10013: Unknown User / 10004: Unknown Guild).
+     * Retrying these errors is futile and wastes Discord API quota and queue bandwidth.
+     */
+    public boolean isTerminalMemberNotFound(Throwable t) {
+        if (t == null) {
+            return false;
+        }
+
+        Throwable curr = t;
+        while (curr != null) {
+            if (curr instanceof ErrorResponseException ere) {
+                ErrorResponse err = ere.getErrorResponse();
+                if (err == ErrorResponse.UNKNOWN_MEMBER
+                        || err == ErrorResponse.UNKNOWN_USER
+                        || err == ErrorResponse.UNKNOWN_GUILD) {
+                    return true;
+                }
+                int code = ere.getErrorCode();
+                if (code == 10007 || code == 10013 || code == 10004) {
+                    return true;
+                }
+            }
+
+            String msg = curr.getMessage();
+            if (msg != null && (msg.contains("10007") || msg.contains("Unknown Member")
+                    || msg.contains("10013") || msg.contains("Unknown User"))) {
+                return true;
+            }
+
+            curr = curr.getCause();
+        }
+
+        return false;
     }
 }

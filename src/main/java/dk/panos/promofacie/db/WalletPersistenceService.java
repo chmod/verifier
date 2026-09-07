@@ -19,8 +19,14 @@ public class WalletPersistenceService {
 
     @Transactional
     public void persist(String address, String discordId, Chain chain) {
-        Wallet wallet = new Wallet();
-        wallet.setAddress(address);
+        Wallet wallet = Wallet.find("address = ?1", address).firstResult();
+        if (wallet == null) {
+            wallet = new Wallet();
+            wallet.setAddress(address);
+        } else if (!discordId.equals(wallet.getDiscordId())) {
+            log.warn("Reassigning wallet address={} from previous discordId={} to new discordId={}",
+                    address, wallet.getDiscordId(), discordId);
+        }
         wallet.setDiscordId(discordId);
         wallet.setChain(chain != null ? chain : Chain.CARDANO);
         wallet.persist();

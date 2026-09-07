@@ -51,6 +51,18 @@ class WalletVerificationResourceTest {
         assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
         Map<?, ?> entity = (Map<?, ?>) response.getEntity();
         assertNotNull(entity.get("nonce"));
+        String challenge = (String) entity.get("nonce");
+        assertTrue(challenge.contains("Promofacie Wallet Verification"));
+        assertTrue(challenge.contains("Discord ID: user-discord-123"));
+    }
+
+    @Test
+    void testChallengeMissingDiscordId() {
+        when(jwtMock.getClaim("discord_id")).thenReturn(null);
+
+        Response response = resource.challenge();
+
+        assertEquals(Response.Status.UNAUTHORIZED.getStatusCode(), response.getStatus());
     }
 
     @Test
