@@ -3,19 +3,17 @@ package dk.panos.promofacie.service.diff;
 import dk.panos.promofacie.kafka.model.AmountPayload;
 import dk.panos.promofacie.kafka.model.UtxoEntry;
 import dk.panos.promofacie.kafka.model.UtxoTransactionPayload;
-import org.mapstruct.Mapper;
-import org.mapstruct.Mapping;
-import org.mapstruct.Named;
+import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-@Mapper(componentModel = "cdi")
-public interface PayloadToSnapshotMapper {
+@ApplicationScoped
+public class PayloadToSnapshotMapper {
 
-    default WalletInventorySnapshot map(UtxoTransactionPayload payload) {
+    public WalletInventorySnapshot map(UtxoTransactionPayload payload) {
         if (payload == null || payload.createdUtxos() == null) {
             return new WalletInventorySnapshot(List.of());
         }
@@ -29,13 +27,19 @@ public interface PayloadToSnapshotMapper {
         return new WalletInventorySnapshot(holdings);
     }
 
-    @Mapping(target = "assetNameHex", source = "assetName")
-    @Mapping(target = "quantity", source = "quantity", qualifiedByName = "stringToLong")
-    @Mapping(target = "traits", source = "traits", qualifiedByName = "objectMapToStringMap")
-    AssetHolding mapAmount(AmountPayload amt);
+    public AssetHolding mapAmount(AmountPayload amt) {
+        if (amt == null) {
+            return null;
+        }
+        return new AssetHolding(
+                amt.policyId(),
+                amt.assetName(),
+                stringToLong(amt.quantity()),
+                objectMapToStringMap(amt.traits())
+        );
+    }
 
-    @Named("stringToLong")
-    default long stringToLong(String value) {
+    public long stringToLong(String value) {
         if (value == null) return 0;
         try {
             return Long.parseLong(value);
@@ -44,8 +48,7 @@ public interface PayloadToSnapshotMapper {
         }
     }
 
-    @Named("objectMapToStringMap")
-    default Map<String, String> objectMapToStringMap(Map<String, Object> traits) {
+    public Map<String, String> objectMapToStringMap(Map<String, Object> traits) {
         if (traits == null) return Map.of();
         return traits.entrySet().stream()
                 .collect(Collectors.toMap(
