@@ -79,8 +79,8 @@ class RuleEvaluationSchedulerTest {
         scheduler.processPendingEvaluations();
 
         // Assert
-        verify(roleEvaluationService, times(1)).upsertOutboxTask("user-1", "guild-1", "role-gold", TargetState.PRESENT, 500L);
-        verify(roleEvaluationService, times(1)).upsertOutboxTask("user-2", "guild-1", "role-gold", TargetState.ABSENT, 0L);
+        verify(roleEvaluationService, times(1)).upsertOutboxTask(eq("user-1"), eq("guild-1"), eq("role-gold"), eq(TargetState.PRESENT), anyLong());
+        verify(roleEvaluationService, times(1)).upsertOutboxTask(eq("user-2"), eq("guild-1"), eq("role-gold"), eq(TargetState.ABSENT), anyLong());
         verify(scheduler, times(1)).markTasksDone(argThat(list -> list.size() == 1 && list.get(0).id == 100L));
     }
 

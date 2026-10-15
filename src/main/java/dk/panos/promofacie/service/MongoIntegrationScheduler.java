@@ -41,7 +41,7 @@ public class MongoIntegrationScheduler {
             MongoDatabase database = mongoClient.getDatabase(databaseName);
             MongoCollection<Document> collection = database.getCollection(collectionName);
             
-            long eventSlot = System.currentTimeMillis() / 1000;
+            long eventSlot = System.currentTimeMillis();
             
             collection.find().forEach((Consumer<Document>) doc -> {
                 String stakeAddress = doc.getString("stakeAddress");

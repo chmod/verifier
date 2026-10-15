@@ -63,13 +63,14 @@ public class RoleEvaluationService {
                         Collectors.mapping(rule -> rule.roleId, Collectors.toSet())
                 ));
 
+        long evaluationVersion = System.currentTimeMillis();
         for (Map.Entry<String, Set<String>> guildEntry : affectedRolesByGuild.entrySet()) {
             String guildId = guildEntry.getKey();
             for (String roleId : guildEntry.getValue()) {
                 boolean meetsGroupedRules = evaluateRoleEligibility(discordId, walletAddresses, guildId, roleId);
                 TargetState targetState = meetsGroupedRules ? TargetState.PRESENT : TargetState.ABSENT;
 
-                upsertOutboxTask(discordId, guildId, roleId, targetState, eventSlot);
+                upsertOutboxTask(discordId, guildId, roleId, targetState, evaluationVersion);
             }
         }
     }

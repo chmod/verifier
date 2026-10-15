@@ -117,7 +117,9 @@ public class UtxoTransactionConsumer {
             }
         }
 
-        long resolvedSlot = currentSlot != null ? Math.max(payload.slot(), currentSlot) : payload.slot();
+        long resolvedSlot = (isRollback || payload.forcedSync() || currentSlot == null)
+                ? payload.slot()
+                : Math.max(payload.slot(), currentSlot);
 
         // 2. Map incoming payload (after)
         WalletInventorySnapshot after = payloadMapper.map(payload);

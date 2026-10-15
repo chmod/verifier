@@ -102,19 +102,13 @@ public class RuleEvaluationScheduler {
                 List<Wallet> wallets = getWalletsByDiscordId(discordId);
                 List<String> walletAddresses = wallets.stream().map(Wallet::getAddress).toList();
 
-                long eventSlot = 0L;
-                if (!walletAddresses.isEmpty()) {
-                    Long maxSlot = getMaxInventorySlot(walletAddresses);
-                    if (maxSlot != null) {
-                        eventSlot = maxSlot;
-                    }
-                }
+                long evaluationVersion = System.currentTimeMillis();
 
                 for (String roleId : uniqueRoleIds) {
                     boolean meetsGroupedRules = roleEvaluationService.evaluateRoleEligibility(discordId, walletAddresses, guildId, roleId);
                     TargetState targetState = meetsGroupedRules ? TargetState.PRESENT : TargetState.ABSENT;
 
-                    roleEvaluationService.upsertOutboxTask(discordId, guildId, roleId, targetState, eventSlot);
+                    roleEvaluationService.upsertOutboxTask(discordId, guildId, roleId, targetState, evaluationVersion);
                 }
             }
 
