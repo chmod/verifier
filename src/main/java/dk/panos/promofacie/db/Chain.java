@@ -1,5 +1,5 @@
 package dk.panos.promofacie.db;
 
 public enum Chain {
-    CARDANO, RADIX, ROBINHOOD
+    CARDANO, RADIX, ROBINHOOD, SOLANA
 }

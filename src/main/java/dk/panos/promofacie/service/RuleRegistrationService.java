@@ -22,6 +22,10 @@ public class RuleRegistrationService {
     @Channel("robinhood-tracking-out")
     Emitter<TrackingCommand> robinhoodTrackingEmitter;
 
+    @Inject
+    @Channel("solana-tracking-out")
+    Emitter<TrackingCommand> solanaTrackingEmitter;
+
     @Transactional
     public void registerRuleAndSync(GuildRoleRule rule) {
         log.info("[RuleRegistration] Registering rule for guild={}, policy={}, role={}, chain={}",
@@ -29,11 +33,22 @@ public class RuleRegistrationService {
 
         rule.persist();
 
-        // Broadcast ADD_POLICY to appropriate indexer (Ponder for Robinhood, Yaci for Cardano)
+        // Broadcast ADD_POLICY to appropriate indexer (Solana, Robinhood, or Cardano)
+        boolean isSolana = rule.getResolvedChain() == dk.panos.promofacie.db.Chain.SOLANA;
         boolean isRobinhood = rule.getResolvedChain() == dk.panos.promofacie.db.Chain.ROBINHOOD;
         TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, rule.policyId);
 
-        if (isRobinhood && robinhoodTrackingEmitter != null) {
+        if (isSolana && solanaTrackingEmitter != null) {
+            log.info("[RuleRegistration] Broadcasting ADD_POLICY to solana for policy={}", rule.policyId);
+            solanaTrackingEmitter.send(cmd)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.error("[RuleRegistration] Failed to send ADD_POLICY to solana for policy={}", rule.policyId, ex);
+                        } else {
+                            log.info("[RuleRegistration] Successfully sent ADD_POLICY to solana for policy={}", rule.policyId);
+                        }
+                    });
+        } else if (isRobinhood && robinhoodTrackingEmitter != null) {
             log.info("[RuleRegistration] Broadcasting ADD_POLICY to robinhood for policy={}", rule.policyId);
             robinhoodTrackingEmitter.send(cmd)
                     .whenComplete((result, ex) -> {
@@ -72,6 +87,7 @@ public class RuleRegistrationService {
         GuildRoleRule rule = GuildRoleRule.findById(ruleId);
         if (rule != null) {
             String policyId = rule.policyId;
+            boolean isSolana = rule.getResolvedChain() == dk.panos.promofacie.db.Chain.SOLANA;
             boolean isRobinhood = rule.getResolvedChain() == dk.panos.promofacie.db.Chain.ROBINHOOD;
             rule.delete();
             
@@ -80,7 +96,17 @@ public class RuleRegistrationService {
             if (count == 0) {
                 log.info("[RuleRegistration] No rules remaining for policyId={} — broadcasting REMOVE_POLICY", policyId);
                 TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.REMOVE_POLICY, null, policyId);
-                if (isRobinhood && robinhoodTrackingEmitter != null) {
+                if (isSolana && solanaTrackingEmitter != null) {
+                    log.info("[RuleRegistration] Broadcasting REMOVE_POLICY to solana for policy={}", policyId);
+                    solanaTrackingEmitter.send(cmd)
+                            .whenComplete((result, ex) -> {
+                                if (ex != null) {
+                                    log.error("[RuleRegistration] Failed to send REMOVE_POLICY to solana for policy={}", policyId, ex);
+                                } else {
+                                    log.info("[RuleRegistration] Successfully sent REMOVE_POLICY to solana for policy={}", policyId);
+                                }
+                            });
+                } else if (isRobinhood && robinhoodTrackingEmitter != null) {
                     log.info("[RuleRegistration] Broadcasting REMOVE_POLICY to robinhood for policy={}", policyId);
                     robinhoodTrackingEmitter.send(cmd)
                             .whenComplete((result, ex) -> {

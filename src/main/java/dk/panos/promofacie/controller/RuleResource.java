@@ -3,6 +3,7 @@ package dk.panos.promofacie.controller;
 import dk.panos.promofacie.controller.model.CriteriaRequest;
 import dk.panos.promofacie.controller.model.RuleRequest;
 import dk.panos.promofacie.controller.model.RuleUpdateResponse;
+import dk.panos.promofacie.db.Chain;
 import dk.panos.promofacie.db.GuildRoleRule;
 import dk.panos.promofacie.db.PendingRuleEvaluation;
 import dk.panos.promofacie.db.RuleTraitCriteria;
@@ -34,6 +35,10 @@ public class RuleResource {
     @Inject
     @Channel("robinhood-tracking-out")
     Emitter<TrackingCommand> robinhoodTrackingEmitter;
+
+    @Inject
+    @Channel("solana-tracking-out")
+    Emitter<TrackingCommand> solanaTrackingEmitter;
 
     @Inject
     net.dv8tion.jda.api.JDA jda;
@@ -162,9 +167,19 @@ public class RuleResource {
 
         // 6. Broadcast Kafka messages for policy updates
         for (String policyId : policyAdds) {
-            boolean isRobinhood = isRobinhoodPolicy(policyId, newRulesList, existingRules);
+            Chain policyChain = resolvePolicyChain(policyId, newRulesList, existingRules);
             TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.ADD_POLICY, null, policyId);
-            if (isRobinhood && robinhoodTrackingEmitter != null) {
+            if (policyChain == dk.panos.promofacie.db.Chain.SOLANA && solanaTrackingEmitter != null) {
+                log.info("[RuleResource] Broadcasting ADD_POLICY to solana for policyId={}", policyId);
+                solanaTrackingEmitter.send(cmd)
+                        .whenComplete((res, ex) -> {
+                            if (ex != null) {
+                                log.error("[RuleResource] Failed to send ADD_POLICY to solana for policyId={}", policyId, ex);
+                            } else {
+                                log.info("[RuleResource] Successfully sent ADD_POLICY to solana for policyId={}", policyId);
+                            }
+                        });
+            } else if (policyChain == dk.panos.promofacie.db.Chain.ROBINHOOD && robinhoodTrackingEmitter != null) {
                 log.info("[RuleResource] Broadcasting ADD_POLICY to robinhood for policyId={}", policyId);
                 robinhoodTrackingEmitter.send(cmd)
                         .whenComplete((res, ex) -> {
@@ -198,12 +213,22 @@ public class RuleResource {
                             .toList();
                     log.info("[RuleResource] Found {} guild member(s) in JDA cache for guild {}", memberIds.size(), guild);
                     if (!memberIds.isEmpty()) {
-                        // Find all verified Cardano addresses of these guild members
+                        // Find all verified addresses of these guild members across all chains
                         List<dk.panos.promofacie.db.Wallet> wallets = getWalletsForDiscordIds(memberIds);
                         log.info("[RuleResource] Found {} verified wallet(s) for the members of guild {}", wallets.size(), guild);
                         for (dk.panos.promofacie.db.Wallet wallet : wallets) {
-                            boolean isRobinhoodWallet = wallet.getChain() == dk.panos.promofacie.db.Chain.ROBINHOOD;
-                            if (isRobinhoodWallet && robinhoodTrackingEmitter != null) {
+                            Chain walletChain = wallet.getChain();
+                            if (walletChain == dk.panos.promofacie.db.Chain.SOLANA && solanaTrackingEmitter != null) {
+                                log.info("[RuleResource] Broadcasting ADD_ADDRESS to solana for address={}", wallet.getAddress());
+                                solanaTrackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null))
+                                        .whenComplete((res, ex) -> {
+                                            if (ex != null) {
+                                                log.error("[RuleResource] Failed to broadcast ADD_ADDRESS to solana for address={}", wallet.getAddress(), ex);
+                                            } else {
+                                                log.info("[RuleResource] Successfully sent ADD_ADDRESS to solana for address: {}", wallet.getAddress());
+                                            }
+                                        });
+                            } else if (walletChain == dk.panos.promofacie.db.Chain.ROBINHOOD && robinhoodTrackingEmitter != null) {
                                 log.info("[RuleResource] Broadcasting ADD_ADDRESS to robinhood for address={}", wallet.getAddress());
                                 robinhoodTrackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null))
                                         .whenComplete((res, ex) -> {
@@ -235,9 +260,19 @@ public class RuleResource {
         }
 
         for (String policyId : policyRemovals) {
-            boolean isRobinhood = isRobinhoodPolicy(policyId, newRulesList, existingRules);
+            Chain policyChain = resolvePolicyChain(policyId, newRulesList, existingRules);
             TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.REMOVE_POLICY, null, policyId);
-            if (isRobinhood && robinhoodTrackingEmitter != null) {
+            if (policyChain == dk.panos.promofacie.db.Chain.SOLANA && solanaTrackingEmitter != null) {
+                log.info("[RuleResource] Broadcasting REMOVE_POLICY to solana for policyId={}", policyId);
+                solanaTrackingEmitter.send(cmd)
+                        .whenComplete((res, ex) -> {
+                            if (ex != null) {
+                                log.error("[RuleResource] Failed to send REMOVE_POLICY to solana for policyId={}", policyId, ex);
+                            } else {
+                                log.info("[RuleResource] Successfully sent REMOVE_POLICY to solana for policyId={}", policyId);
+                            }
+                        });
+            } else if (policyChain == dk.panos.promofacie.db.Chain.ROBINHOOD && robinhoodTrackingEmitter != null) {
                 log.info("[RuleResource] Broadcasting REMOVE_POLICY to robinhood for policyId={}", policyId);
                 robinhoodTrackingEmitter.send(cmd)
                         .whenComplete((res, ex) -> {
@@ -268,24 +303,30 @@ public class RuleResource {
         return Response.ok(responseBody).build();
     }
 
-    private boolean isRobinhoodPolicy(String policyId, List<RuleRequest> newRules, List<GuildRoleRule> existingRules) {
-        if (policyId == null) return false;
-        if (policyId.startsWith("0x") || policyId.startsWith("0X")) return true;
+    public Chain resolvePolicyChain(String policyId, List<RuleRequest> newRules, List<GuildRoleRule> existingRules) {
+        if (policyId == null) return dk.panos.promofacie.db.Chain.CARDANO;
         if (newRules != null) {
             for (RuleRequest req : newRules) {
-                if (policyId.equalsIgnoreCase(req.policyId()) && req.getResolvedChain() == dk.panos.promofacie.db.Chain.ROBINHOOD) {
-                    return true;
+                if (policyId.equalsIgnoreCase(req.policyId())) {
+                    return req.getResolvedChain();
                 }
             }
         }
         if (existingRules != null) {
             for (GuildRoleRule rule : existingRules) {
-                if (policyId.equalsIgnoreCase(rule.policyId) && rule.getResolvedChain() == dk.panos.promofacie.db.Chain.ROBINHOOD) {
-                    return true;
+                if (policyId.equalsIgnoreCase(rule.policyId)) {
+                    return rule.getResolvedChain();
                 }
             }
         }
-        return false;
+        if (policyId.startsWith("0x") || policyId.startsWith("0X")) {
+            return dk.panos.promofacie.db.Chain.ROBINHOOD;
+        }
+        return dk.panos.promofacie.db.Chain.CARDANO;
+    }
+
+    boolean isRobinhoodPolicy(String policyId, List<RuleRequest> newRules, List<GuildRoleRule> existingRules) {
+        return resolvePolicyChain(policyId, newRules, existingRules) == dk.panos.promofacie.db.Chain.ROBINHOOD;
     }
 
     @GET

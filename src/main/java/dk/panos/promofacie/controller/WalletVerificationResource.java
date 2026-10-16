@@ -15,6 +15,7 @@ import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.Response;
+import dk.panos.promofacie.util.Base58;
 import org.cardanofoundation.cip30.AddressFormat;
 import org.cardanofoundation.cip30.CIP30Verifier;
 import org.cardanofoundation.cip30.Cip30VerificationResult;
@@ -29,8 +30,13 @@ import org.web3j.crypto.Sign;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +57,10 @@ public class WalletVerificationResource {
     @Inject
     @Channel("robinhood-tracking-out")
     Emitter<TrackingCommand> robinhoodTrackingEmitter;
+
+    @Inject
+    @Channel("solana-tracking-out")
+    Emitter<TrackingCommand> solanaTrackingEmitter;
 
     @Inject
     WalletPersistenceService walletPersistenceService;
@@ -100,12 +110,16 @@ public class WalletVerificationResource {
             return Response.status(400).entity(Map.of("message", "Wallet address is required")).build();
         }
 
-        boolean isRobinhood = "ROBINHOOD".equalsIgnoreCase(req.chain())
+        boolean isSolana = "SOLANA".equalsIgnoreCase(req.chain());
+
+        boolean isRobinhood = !isSolana && ("ROBINHOOD".equalsIgnoreCase(req.chain())
                 || resolvedAddress.startsWith("0x")
-                || resolvedAddress.startsWith("0X");
+                || resolvedAddress.startsWith("0X"));
 
         boolean verified;
-        if (isRobinhood) {
+        if (isSolana) {
+            verified = verifySolanaWalletOwnership(resolvedAddress, req.signature(), entry.nonce());
+        } else if (isRobinhood) {
             verified = verifyEvmWalletOwnership(resolvedAddress, req.signature(), entry.nonce());
         } else {
             verified = verifyWalletOwnership(resolvedAddress, req.signature(), req.key(), entry.nonce());
@@ -115,7 +129,7 @@ public class WalletVerificationResource {
             return Response.status(400).entity(Map.of("message", "Signature verification failed")).build();
         }
 
-        Chain targetChain = isRobinhood ? Chain.ROBINHOOD : Chain.CARDANO;
+        Chain targetChain = isSolana ? Chain.SOLANA : (isRobinhood ? Chain.ROBINHOOD : Chain.CARDANO);
         log.info("Signature verification successful for address={} discordId={} chain={}", 
                 resolvedAddress, discordId, targetChain);
 
@@ -124,7 +138,16 @@ public class WalletVerificationResource {
 
         // 2. Broadcast tracking command to Kafka
         TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, resolvedAddress, null);
-        if (isRobinhood) {
+        if (isSolana) {
+            solanaTrackingEmitter.send(cmd)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.error("Failed to send tracking command to solana address={}: {}", resolvedAddress, ex.getMessage(), ex);
+                        } else {
+                            log.info("Successfully sent ADD_ADDRESS tracking command to solana for address: {}", resolvedAddress);
+                        }
+                    });
+        } else if (isRobinhood) {
             robinhoodTrackingEmitter.send(cmd)
                     .whenComplete((result, ex) -> {
                         if (ex != null) {
@@ -201,7 +224,16 @@ public class WalletVerificationResource {
             }
 
             TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.REMOVE_ADDRESS, targetAddress, null);
-            if (wallet.getChain() == Chain.ROBINHOOD) {
+            if (wallet.getChain() == Chain.SOLANA) {
+                solanaTrackingEmitter.send(cmd)
+                        .whenComplete((result, ex) -> {
+                            if (ex != null) {
+                                log.error("Failed to send REMOVE_ADDRESS to solana for address={}: {}", targetAddress, ex.getMessage(), ex);
+                            } else {
+                                log.info("Successfully sent REMOVE_ADDRESS to solana for address: {}", targetAddress);
+                            }
+                        });
+            } else if (wallet.getChain() == Chain.ROBINHOOD) {
                 robinhoodTrackingEmitter.send(cmd)
                         .whenComplete((result, ex) -> {
                             if (ex != null) {
@@ -227,7 +259,16 @@ public class WalletVerificationResource {
             List<Wallet> wallets = walletPersistenceService.findByDiscordId(discordId);
             for (Wallet w : wallets) {
                 TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.REMOVE_ADDRESS, w.getAddress(), null);
-                if (w.getChain() == Chain.ROBINHOOD) {
+                if (w.getChain() == Chain.SOLANA) {
+                    solanaTrackingEmitter.send(cmd)
+                            .whenComplete((result, ex) -> {
+                                if (ex != null) {
+                                    log.error("Failed to send REMOVE_ADDRESS to solana for address={}: {}", w.getAddress(), ex.getMessage(), ex);
+                                } else {
+                                    log.info("Successfully sent REMOVE_ADDRESS to solana for address: {}", w.getAddress());
+                                }
+                            });
+                } else if (w.getChain() == Chain.ROBINHOOD) {
                     robinhoodTrackingEmitter.send(cmd)
                             .whenComplete((result, ex) -> {
                                 if (ex != null) {
@@ -307,6 +348,82 @@ public class WalletVerificationResource {
             return match;
         } catch (Exception e) {
             log.error("EVM signature verification failed for address={}", address, e);
+            return false;
+        }
+    }
+
+    public boolean verifySolanaWalletOwnership(String address, String signature, String nonce) {
+        try {
+            if (address == null || signature == null || nonce == null) {
+                log.warn("Solana verify missing parameters: address={}, hasSig={}, hasNonce={}",
+                        address, signature != null, nonce != null);
+                return false;
+            }
+
+            // Decode address (Base58 32-byte public key)
+            byte[] rawPubKey;
+            try {
+                rawPubKey = Base58.decode(address.trim());
+            } catch (Exception e) {
+                log.warn("Invalid Solana address Base58: {}", address);
+                return false;
+            }
+            if (rawPubKey.length != 32) {
+                log.warn("Invalid Solana public key length: expected 32 bytes, got {}", rawPubKey.length);
+                return false;
+            }
+
+            // Decode signature (64 bytes). Try Base58, then Base64, then Hex
+            byte[] sigBytes = null;
+            String cleanSig = signature.trim();
+            try {
+                byte[] b58 = Base58.decode(cleanSig);
+                if (b58.length == 64) {
+                    sigBytes = b58;
+                }
+            } catch (Exception ignored) {}
+
+            if (sigBytes == null) {
+                try {
+                    byte[] b64 = Base64.getDecoder().decode(cleanSig);
+                    if (b64.length == 64) {
+                        sigBytes = b64;
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            if (sigBytes == null) {
+                try {
+                    String hex = cleanSig.startsWith("0x") ? cleanSig.substring(2) : cleanSig;
+                    if (hex.length() == 128) {
+                        sigBytes = HexFormat.of().parseHex(hex);
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            if (sigBytes == null || sigBytes.length != 64) {
+                log.warn("Invalid Solana signature: could not decode 64 bytes from input (len={})", cleanSig.length());
+                return false;
+            }
+
+            // Reconstruct X.509 SubjectPublicKeyInfo with RFC 8410 Ed25519 prefix
+            byte[] rfc8410Prefix = new byte[]{0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00};
+            byte[] fullX509 = new byte[rfc8410Prefix.length + rawPubKey.length];
+            System.arraycopy(rfc8410Prefix, 0, fullX509, 0, rfc8410Prefix.length);
+            System.arraycopy(rawPubKey, 0, fullX509, rfc8410Prefix.length, rawPubKey.length);
+
+            KeyFactory kf = KeyFactory.getInstance("Ed25519");
+            PublicKey pubKey = kf.generatePublic(new X509EncodedKeySpec(fullX509));
+
+            Signature verifier = Signature.getInstance("Ed25519");
+            verifier.initVerify(pubKey);
+            verifier.update(nonce.getBytes(StandardCharsets.UTF_8));
+            boolean verified = verifier.verify(sigBytes);
+
+            log.info("Solana verify result: verified={}, address={}", verified, address);
+            return verified;
+        } catch (Exception e) {
+            log.error("Solana signature verification failed for address={}", address, e);
             return false;
         }
     }

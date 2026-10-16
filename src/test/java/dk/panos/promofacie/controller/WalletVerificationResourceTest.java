@@ -25,6 +25,7 @@ class WalletVerificationResourceTest {
     private WalletVerificationResource resource;
     private JsonWebToken jwtMock;
     private Emitter<TrackingCommand> emitterMock;
+    private Emitter<TrackingCommand> solanaEmitterMock;
     private WalletPersistenceService persistenceServiceMock;
 
     @BeforeEach
@@ -33,13 +34,16 @@ class WalletVerificationResourceTest {
         resource = new WalletVerificationResource();
         jwtMock = mock(JsonWebToken.class);
         emitterMock = mock(Emitter.class);
+        solanaEmitterMock = mock(Emitter.class);
         persistenceServiceMock = mock(WalletPersistenceService.class);
 
         resource.jwt = jwtMock;
         resource.walletTrackingEmitter = emitterMock;
+        resource.solanaTrackingEmitter = solanaEmitterMock;
         resource.walletPersistenceService = persistenceServiceMock;
 
         when(emitterMock.send(any(TrackingCommand.class))).thenReturn(CompletableFuture.completedFuture(null));
+        when(solanaEmitterMock.send(any(TrackingCommand.class))).thenReturn(CompletableFuture.completedFuture(null));
     }
 
     @Test
@@ -146,5 +150,66 @@ class WalletVerificationResourceTest {
         assertEquals("stake1address1", captor.getValue().stakeAddress());
 
         verify(persistenceServiceMock, times(1)).deleteAllByDiscordId("user-discord-123");
+    }
+
+    @Test
+    void testVerifySolanaWalletSuccess() throws Exception {
+        // Generate valid Ed25519 keypair and signature
+        java.security.KeyPairGenerator kpg = java.security.KeyPairGenerator.getInstance("Ed25519");
+        java.security.KeyPair kp = kpg.generateKeyPair();
+
+        when(jwtMock.getClaim("discord_id")).thenReturn("solana-user-456");
+
+        // Request challenge
+        Response challengeRes = resource.challenge();
+        Map<?, ?> body = (Map<?, ?>) challengeRes.getEntity();
+        String nonce = (String) body.get("nonce");
+
+        // Sign challenge nonce
+        java.security.Signature signer = java.security.Signature.getInstance("Ed25519");
+        signer.initSign(kp.getPrivate());
+        signer.update(nonce.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] sig = signer.sign();
+
+        byte[] rawPubKey = java.util.Arrays.copyOfRange(kp.getPublic().getEncoded(), 12, 44);
+        String solAddress = dk.panos.promofacie.util.Base58.encode(rawPubKey);
+        String sigBase58 = dk.panos.promofacie.util.Base58.encode(sig);
+
+        dk.panos.promofacie.controller.model.VerifyRequest verifyReq =
+                new dk.panos.promofacie.controller.model.VerifyRequest(solAddress, null, sigBase58, null, "SOLANA");
+
+        Response verifyRes = resource.verify(verifyReq);
+        assertEquals(Response.Status.OK.getStatusCode(), verifyRes.getStatus());
+
+        verify(persistenceServiceMock, times(1)).persist(solAddress, "solana-user-456", Chain.SOLANA);
+
+        ArgumentCaptor<TrackingCommand> captor = ArgumentCaptor.forClass(TrackingCommand.class);
+        verify(solanaEmitterMock, times(1)).send(captor.capture());
+        assertEquals(TrackingCommand.Action.ADD_ADDRESS, captor.getValue().action());
+        assertEquals(solAddress, captor.getValue().stakeAddress());
+    }
+
+    @Test
+    void testDeleteAssociationSolanaAddress() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("solana-user-456");
+
+        Wallet solWallet = new Wallet();
+        solWallet.id = 99L;
+        solWallet.setAddress("SolanaAddr1111111111111111111111111111111111");
+        solWallet.setDiscordId("solana-user-456");
+        solWallet.setChain(Chain.SOLANA);
+
+        when(persistenceServiceMock.findByAddressAndDiscordId("SolanaAddr1111111111111111111111111111111111", "solana-user-456"))
+                .thenReturn(solWallet);
+        when(persistenceServiceMock.deleteByAddressAndDiscordId("SolanaAddr1111111111111111111111111111111111", "solana-user-456"))
+                .thenReturn(true);
+
+        Response response = resource.deleteAssociation("SolanaAddr1111111111111111111111111111111111");
+        assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+
+        ArgumentCaptor<TrackingCommand> captor = ArgumentCaptor.forClass(TrackingCommand.class);
+        verify(solanaEmitterMock, times(1)).send(captor.capture());
+        assertEquals(TrackingCommand.Action.REMOVE_ADDRESS, captor.getValue().action());
+        assertEquals("SolanaAddr1111111111111111111111111111111111", captor.getValue().stakeAddress());
     }
 }
