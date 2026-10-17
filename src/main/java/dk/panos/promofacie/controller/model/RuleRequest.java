@@ -48,14 +48,20 @@ public record RuleRequest(
     }
 
     public dk.panos.promofacie.db.Chain getResolvedChain() {
+        if (policyId != null) {
+            String p = policyId.trim();
+            if (p.startsWith("0x") || p.startsWith("0X")) {
+                return dk.panos.promofacie.db.Chain.ROBINHOOD;
+            }
+            if (p.length() >= 32 && p.length() <= 44 && p.length() != 56) {
+                return dk.panos.promofacie.db.Chain.SOLANA;
+            }
+        }
         String c = blockchain != null && !blockchain.isBlank() ? blockchain : chain;
         if (c != null && !c.isBlank()) {
             try {
                 return dk.panos.promofacie.db.Chain.valueOf(c.trim().toUpperCase());
             } catch (Exception ignored) {}
-        }
-        if (policyId != null && (policyId.startsWith("0x") || policyId.startsWith("0X"))) {
-            return dk.panos.promofacie.db.Chain.ROBINHOOD;
         }
         return dk.panos.promofacie.db.Chain.CARDANO;
     }

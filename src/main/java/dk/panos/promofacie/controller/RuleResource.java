@@ -91,9 +91,20 @@ public class RuleResource {
         // policyAdds: present in new rules but NOT present in the DB at all (globally)
         // before this change
         for (String policyId : newPolicies) {
-            if (!existingPolicies.contains(policyId)) {
+            Chain newChain = resolvePolicyChain(policyId, newRulesList, existingRules);
+            boolean isNewInGuild = !existingPolicies.contains(policyId);
+            if (isNewInGuild) {
                 long count = countPolicyGlobally(policyId);
                 if (count == 0) {
+                    policyAdds.add(policyId);
+                }
+            } else {
+                Chain existingChain = existingRules.stream()
+                        .filter(r -> policyId.equalsIgnoreCase(r.policyId))
+                        .map(GuildRoleRule::getResolvedChain)
+                        .findFirst()
+                        .orElse(null);
+                if (existingChain != null && existingChain != newChain) {
                     policyAdds.add(policyId);
                 }
             }
@@ -322,6 +333,9 @@ public class RuleResource {
         if (policyId.startsWith("0x") || policyId.startsWith("0X")) {
             return dk.panos.promofacie.db.Chain.ROBINHOOD;
         }
+        if (policyId.length() >= 32 && policyId.length() <= 44 && policyId.length() != 56) {
+            return dk.panos.promofacie.db.Chain.SOLANA;
+        }
         return dk.panos.promofacie.db.Chain.CARDANO;
     }
 
@@ -386,6 +400,10 @@ public class RuleResource {
     // Database helper methods to support isolated unit testing via Spying
     List<GuildRoleRule> getExistingRules(String guild) {
         return GuildRoleRule.find("from GuildRoleRule r left join fetch r.criteria where r.guildId = ?1", guild).list();
+    }
+
+    long countPolicyGlobally(String policyId, Chain chain) {
+        return GuildRoleRule.count("policyId = ?1 and chain = ?2", policyId, chain);
     }
 
     long countPolicyGlobally(String policyId) {
