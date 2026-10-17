@@ -35,7 +35,7 @@ public class GuildRoleRule extends PanacheEntity {
     public Boolean isAnd = false;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "chain")
+    @Column(name = "chain", columnDefinition = "varchar(32)")
     public Chain chain = Chain.CARDANO;
 
     public Chain getResolvedChain() {

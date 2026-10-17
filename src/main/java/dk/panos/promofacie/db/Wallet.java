@@ -14,7 +14,7 @@ public class Wallet extends PanacheEntity {
     @Column(nullable = false)
     private String discordId;
     @Enumerated(EnumType.STRING)
-    @Column(name = "chain")
+    @Column(name = "chain", columnDefinition = "varchar(32)")
     private Chain chain;
 
     public String getAddress() {
