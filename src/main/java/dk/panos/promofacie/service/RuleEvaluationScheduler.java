@@ -1,6 +1,7 @@
 package dk.panos.promofacie.service;
 
 import dk.panos.promofacie.db.PendingRuleEvaluation;
+import dk.panos.promofacie.db.PendingUserEvaluation;
 import dk.panos.promofacie.db.GuildRoleRule;
 import dk.panos.promofacie.db.UserAssetInventory;
 import dk.panos.promofacie.db.Wallet;
@@ -36,8 +37,16 @@ public class RuleEvaluationScheduler {
     @Inject
     RoleEvaluationService roleEvaluationService;
 
+    @Inject
+    RoleSyncScheduler roleSyncScheduler;
+
     @Scheduled(every = "10s", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     public void processPendingEvaluations() {
+        processPendingRuleEvaluations();
+        processPendingUserEvaluations();
+    }
+
+    public void processPendingRuleEvaluations() {
         List<PendingRuleEvaluation> acquired = acquirePendingEvaluations();
         if (acquired.isEmpty()) {
             return;
@@ -207,6 +216,97 @@ public class RuleEvaluationScheduler {
                 managed.updatedAt = Instant.now();
                 managed.persist();
             }
+        }
+    }
+
+    public void processPendingUserEvaluations() {
+        List<PendingUserEvaluation> acquired = acquirePendingUserEvaluations();
+        if (acquired.isEmpty()) {
+            return;
+        }
+
+        log.info("[RuleEvaluationScheduler] Acquired {} pending user evaluation task(s) to process", acquired.size());
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (PendingUserEvaluation task : acquired) {
+                executor.submit(() -> processSingleUserEvaluation(task));
+            }
+        } catch (Exception e) {
+            log.error("[RuleEvaluationScheduler] Error executing virtual thread user evaluation processors", e);
+        }
+    }
+
+    public void processSingleUserEvaluation(PendingUserEvaluation task) {
+        String guildId = task.guildId;
+        String discordId = task.discordId;
+        log.info("[RuleEvaluationScheduler] Starting user evaluation for user {} in guild {} (task id: {})",
+                discordId, guildId, task.id);
+        try {
+            roleEvaluationService.recalculateUserRolesInGuild(discordId, guildId);
+            if (roleSyncScheduler != null) {
+                roleSyncScheduler.processUserGuildGroup(discordId, guildId);
+            }
+            markUserTaskDone(task);
+            log.info("[RuleEvaluationScheduler] Successfully completed user evaluation for user {} in guild {}",
+                    discordId, guildId);
+        } catch (Exception e) {
+            log.error("[RuleEvaluationScheduler] Failed user evaluation for user {} in guild {}: {}",
+                    discordId, guildId, e.getMessage(), e);
+            handleUserTaskFailure(task, e.getMessage() != null ? e.getMessage() : e.getClass().getName());
+        }
+    }
+
+    @Transactional
+    public List<PendingUserEvaluation> acquirePendingUserEvaluations() {
+        List<PendingUserEvaluation> list = PendingUserEvaluation.find("status = 'PENDING' or status = 'FAILED'")
+                .withLock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+                .withHint("jakarta.persistence.lock.timeout", -2) // SKIP LOCKED
+                .list();
+        List<PendingUserEvaluation> acquired = new ArrayList<>();
+        for (PendingUserEvaluation item : list) {
+            if (item.retryCount < MAX_RETRY_COUNT) {
+                item.status = "PROCESSING";
+                item.updatedAt = Instant.now();
+                item.persist();
+                acquired.add(item);
+            } else {
+                item.status = "FAILED_EXHAUSTED";
+                item.updatedAt = Instant.now();
+                item.persist();
+                log.warn("[RuleEvaluationScheduler] User evaluation task {} has exhausted retry budget ({}) — marking FAILED_EXHAUSTED",
+                        item.id, MAX_RETRY_COUNT);
+            }
+        }
+        return acquired;
+    }
+
+    @Transactional
+    public void markUserTaskDone(PendingUserEvaluation task) {
+        PendingUserEvaluation managed = PendingUserEvaluation.findById(task.id);
+        if (managed != null) {
+            managed.status = "DONE";
+            managed.updatedAt = Instant.now();
+            managed.persist();
+            log.info("[RuleEvaluationScheduler] User evaluation completed for task id={}", task.id);
+        }
+    }
+
+    @Transactional
+    public void handleUserTaskFailure(PendingUserEvaluation task, String errorMessage) {
+        PendingUserEvaluation managed = PendingUserEvaluation.findById(task.id);
+        if (managed != null) {
+            managed.retryCount++;
+            if (managed.retryCount >= MAX_RETRY_COUNT) {
+                managed.status = "FAILED_EXHAUSTED";
+                log.error("[RuleEvaluationScheduler] User evaluation failed terminally (exhausted retry limit): task id={}, error={}", task.id, errorMessage);
+            } else {
+                managed.status = "FAILED";
+                log.warn("[RuleEvaluationScheduler] User evaluation failed and will retry: task id={} (attempt {}/{}), error={}",
+                        task.id, managed.retryCount, MAX_RETRY_COUNT, errorMessage);
+            }
+            managed.errorMessage = errorMessage.length() > 999 ? errorMessage.substring(0, 999) : errorMessage;
+            managed.updatedAt = Instant.now();
+            managed.persist();
         }
     }
 }

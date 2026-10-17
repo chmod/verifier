@@ -26,7 +26,6 @@ public class DiscordApiDI {
                     .setActivity(Activity.playing("Wallet verifier"))
                     .build()
                     .awaitReady();
-            jda.updateCommands().queue();
             return jda;
         } catch (InterruptedException e) {
             throw new RuntimeException(e.getMessage());

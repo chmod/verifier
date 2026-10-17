@@ -280,4 +280,28 @@ public class RoleEvaluationService {
     List<GuildRoleRule> getRulesForRole(String guildId, String roleId) {
         return GuildRoleRule.list("guildId = ?1 and roleId = ?2", guildId, roleId);
     }
+
+    @Transactional
+    public void recalculateUserRolesInGuild(String discordId, String guildId) {
+        List<GuildRoleRule> rules = GuildRoleRule.list("guildId", guildId);
+        List<Wallet> wallets = Wallet.list("discordId = ?1", discordId);
+        List<String> walletAddresses = wallets.stream().map(Wallet::getAddress).toList();
+
+        if (rules.isEmpty()) {
+            log.info("[RoleEvaluation] No rules configured for guild {}", guildId);
+            return;
+        }
+
+        Set<String> uniqueRoleIds = rules.stream().map(r -> r.roleId).collect(Collectors.toSet());
+        long evaluationVersion = System.currentTimeMillis();
+
+        for (String roleId : uniqueRoleIds) {
+            boolean meetsGroupedRules = evaluateRoleEligibility(discordId, walletAddresses, guildId, roleId);
+            TargetState targetState = meetsGroupedRules ? TargetState.PRESENT : TargetState.ABSENT;
+            upsertOutboxTask(discordId, guildId, roleId, targetState, evaluationVersion);
+        }
+
+        log.info("[RoleEvaluation] Recalculated {} unique role(s) for user {} in guild {}",
+                uniqueRoleIds.size(), discordId, guildId);
+    }
 }

@@ -66,7 +66,7 @@ public class RoleSyncScheduler {
         }
     }
 
-    private void processUserGuildGroup(String discordId, String guildId) {
+    public void processUserGuildGroup(String discordId, String guildId) {
         try {
             // Acquire lock and mark tasks as PROCESSING in a short transaction. This commits
             // and releases the row lock before the JDA call below runs — we deliberately do

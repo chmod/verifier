@@ -36,6 +36,7 @@ class RuleEvaluationSchedulerTest {
         task1.status = "PENDING";
         
         doReturn(List.of(task1)).when(scheduler).acquirePendingEvaluations();
+        doReturn(List.of()).when(scheduler).acquirePendingUserEvaluations();
 
         Guild guild = mock(Guild.class);
         when(jda.getGuildById("guild-1")).thenReturn(guild);
@@ -102,6 +103,7 @@ class RuleEvaluationSchedulerTest {
         task1.status = "PENDING";
         
         doReturn(List.of(task1)).when(scheduler).acquirePendingEvaluations();
+        doReturn(List.of()).when(scheduler).acquirePendingUserEvaluations();
 
         Guild guild = mock(Guild.class);
         when(jda.getGuildById("guild-1")).thenReturn(guild);
@@ -135,5 +137,30 @@ class RuleEvaluationSchedulerTest {
             eq("Simulated Database Error")
         );
         verify(scheduler, never()).markTasksDone(any());
+    }
+
+    @Test
+    void testProcessPendingUserEvaluations() {
+        RuleEvaluationScheduler scheduler = Mockito.spy(new RuleEvaluationScheduler());
+        RoleEvaluationService roleEvaluationService = mock(RoleEvaluationService.class);
+        RoleSyncScheduler roleSyncScheduler = mock(RoleSyncScheduler.class);
+        scheduler.roleEvaluationService = roleEvaluationService;
+        scheduler.roleSyncScheduler = roleSyncScheduler;
+
+        dk.panos.promofacie.db.PendingUserEvaluation userTask = new dk.panos.promofacie.db.PendingUserEvaluation();
+        userTask.id = 200L;
+        userTask.guildId = "guild-1";
+        userTask.discordId = "user-123";
+        userTask.status = "PROCESSING";
+
+        doReturn(List.of()).when(scheduler).acquirePendingEvaluations();
+        doReturn(List.of(userTask)).when(scheduler).acquirePendingUserEvaluations();
+        doNothing().when(scheduler).markUserTaskDone(any());
+
+        scheduler.processPendingEvaluations();
+
+        verify(roleEvaluationService, times(1)).recalculateUserRolesInGuild("user-123", "guild-1");
+        verify(roleSyncScheduler, times(1)).processUserGuildGroup("user-123", "guild-1");
+        verify(scheduler, times(1)).markUserTaskDone(userTask);
     }
 }
