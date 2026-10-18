@@ -39,10 +39,16 @@ public class GuildRoleRule extends PanacheEntity {
     public Chain chain = Chain.CARDANO;
 
     public Chain getResolvedChain() {
-        if (chain != null) return chain;
-        if (policyId != null && (policyId.startsWith("0x") || policyId.startsWith("0X"))) {
-            return Chain.ROBINHOOD;
+        if (policyId != null) {
+            String p = policyId.trim();
+            if (p.startsWith("0x") || p.startsWith("0X")) {
+                return Chain.ROBINHOOD;
+            }
+            if (p.length() == 56 && p.matches("^[0-9a-fA-F]{56}$")) {
+                return Chain.CARDANO;
+            }
         }
+        if (chain != null) return chain;
         return Chain.CARDANO;
     }
 

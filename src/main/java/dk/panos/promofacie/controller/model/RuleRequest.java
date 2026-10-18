@@ -53,6 +53,9 @@ public record RuleRequest(
             if (p.startsWith("0x") || p.startsWith("0X")) {
                 return dk.panos.promofacie.db.Chain.ROBINHOOD;
             }
+            if (p.length() == 56 && p.matches("^[0-9a-fA-F]{56}$")) {
+                return dk.panos.promofacie.db.Chain.CARDANO;
+            }
             if (p.length() >= 32 && p.length() <= 44 && p.length() != 56) {
                 return dk.panos.promofacie.db.Chain.SOLANA;
             }

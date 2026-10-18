@@ -333,6 +333,9 @@ public class RuleResource {
         if (policyId.startsWith("0x") || policyId.startsWith("0X")) {
             return dk.panos.promofacie.db.Chain.ROBINHOOD;
         }
+        if (policyId.length() == 56 && policyId.matches("^[0-9a-fA-F]{56}$")) {
+            return dk.panos.promofacie.db.Chain.CARDANO;
+        }
         if (policyId.length() >= 32 && policyId.length() <= 44 && policyId.length() != 56) {
             return dk.panos.promofacie.db.Chain.SOLANA;
         }
