@@ -139,4 +139,56 @@ class DiscordSlashCommandListenerTest {
         verify(event).reply("⏳ Role recalculation has been queued for <@user-other>.");
         verify(replyAction).queue();
     }
+
+    @Test
+    void testTriggerWalletRefreshBroadcastsToAllEmitters() {
+        DiscordSlashCommandListener listener = new DiscordSlashCommandListener();
+
+        dk.panos.promofacie.db.WalletPersistenceService walletService = mock(dk.panos.promofacie.db.WalletPersistenceService.class);
+        org.eclipse.microprofile.reactive.messaging.Emitter<dk.panos.promofacie.kafka.model.TrackingCommand> cardanoEmitter = mock(org.eclipse.microprofile.reactive.messaging.Emitter.class);
+        org.eclipse.microprofile.reactive.messaging.Emitter<dk.panos.promofacie.kafka.model.TrackingCommand> robinhoodEmitter = mock(org.eclipse.microprofile.reactive.messaging.Emitter.class);
+        org.eclipse.microprofile.reactive.messaging.Emitter<dk.panos.promofacie.kafka.model.TrackingCommand> solanaEmitter = mock(org.eclipse.microprofile.reactive.messaging.Emitter.class);
+
+        when(cardanoEmitter.send(any(dk.panos.promofacie.kafka.model.TrackingCommand.class))).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
+        when(robinhoodEmitter.send(any(dk.panos.promofacie.kafka.model.TrackingCommand.class))).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
+        when(solanaEmitter.send(any(dk.panos.promofacie.kafka.model.TrackingCommand.class))).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
+
+        listener.walletPersistenceService = walletService;
+        listener.trackingEmitter = cardanoEmitter;
+        listener.robinhoodTrackingEmitter = robinhoodEmitter;
+        listener.solanaTrackingEmitter = solanaEmitter;
+
+        dk.panos.promofacie.db.Wallet cardanoWallet = new dk.panos.promofacie.db.Wallet();
+        cardanoWallet.setAddress("stake1u9dgfs9emfdah75lw2gxrrq8gjlq2q9n7r3qhkyjvjhsfwqzrashg");
+        cardanoWallet.setChain(dk.panos.promofacie.db.Chain.CARDANO);
+
+        dk.panos.promofacie.db.Wallet rhWallet = new dk.panos.promofacie.db.Wallet();
+        rhWallet.setAddress("0xa81c87cfd4d0ce36aae9c1bda543ba0ae55a085a");
+        rhWallet.setChain(dk.panos.promofacie.db.Chain.ROBINHOOD);
+
+        dk.panos.promofacie.db.Wallet solWallet = new dk.panos.promofacie.db.Wallet();
+        solWallet.setAddress("sol1111111111111111111111111111111111111111");
+        solWallet.setChain(dk.panos.promofacie.db.Chain.SOLANA);
+
+        when(walletService.findByDiscordId("user-123")).thenReturn(java.util.List.of(cardanoWallet, rhWallet, solWallet));
+
+        listener.triggerWalletRefresh("user-123");
+
+        org.mockito.ArgumentCaptor<dk.panos.promofacie.kafka.model.TrackingCommand> cardanoCaptor = org.mockito.ArgumentCaptor.forClass(dk.panos.promofacie.kafka.model.TrackingCommand.class);
+        org.mockito.ArgumentCaptor<dk.panos.promofacie.kafka.model.TrackingCommand> rhCaptor = org.mockito.ArgumentCaptor.forClass(dk.panos.promofacie.kafka.model.TrackingCommand.class);
+        org.mockito.ArgumentCaptor<dk.panos.promofacie.kafka.model.TrackingCommand> solCaptor = org.mockito.ArgumentCaptor.forClass(dk.panos.promofacie.kafka.model.TrackingCommand.class);
+
+        verify(cardanoEmitter).send(cardanoCaptor.capture());
+        verify(robinhoodEmitter).send(rhCaptor.capture());
+        verify(solanaEmitter).send(solCaptor.capture());
+
+        org.junit.jupiter.api.Assertions.assertEquals(dk.panos.promofacie.kafka.model.TrackingCommand.Action.ADD_ADDRESS, cardanoCaptor.getValue().action());
+        org.junit.jupiter.api.Assertions.assertEquals("stake1u9dgfs9emfdah75lw2gxrrq8gjlq2q9n7r3qhkyjvjhsfwqzrashg", cardanoCaptor.getValue().stakeAddress());
+
+        org.junit.jupiter.api.Assertions.assertEquals(dk.panos.promofacie.kafka.model.TrackingCommand.Action.ADD_ADDRESS, rhCaptor.getValue().action());
+        org.junit.jupiter.api.Assertions.assertEquals("0xa81c87cfd4d0ce36aae9c1bda543ba0ae55a085a", rhCaptor.getValue().stakeAddress());
+
+        org.junit.jupiter.api.Assertions.assertEquals(dk.panos.promofacie.kafka.model.TrackingCommand.Action.ADD_ADDRESS, solCaptor.getValue().action());
+        org.junit.jupiter.api.Assertions.assertEquals("sol1111111111111111111111111111111111111111", solCaptor.getValue().stakeAddress());
+    }
 }

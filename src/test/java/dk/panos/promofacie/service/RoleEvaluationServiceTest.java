@@ -1,10 +1,10 @@
 package dk.panos.promofacie.service;
 
+import dk.panos.promofacie.controller.model.RuleRequest;
 import dk.panos.promofacie.db.GuildRoleRule;
 import dk.panos.promofacie.db.RuleTraitCriteria;
 import dk.panos.promofacie.db.UserAssetInventory;
 import org.junit.jupiter.api.Test;
-import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
 import java.util.List;
@@ -262,5 +262,56 @@ class RoleEvaluationServiceTest {
         // min 10, max null
         assertTrue(service.isQuantityCompliant(1000, 10L, null));
         assertFalse(service.isQuantityCompliant(5, 10L, null));
+    }
+
+    @Test
+    void testRuleRequestNormalizePolicyId() {
+        // EVM mixed case and 0X
+        assertEquals("0x63ffd4aa844f4befcee1b4606e467d1d209a926b",
+                RuleRequest.normalizePolicyId("0x63FFd4aA844f4BEFCee1B4606E467D1D209A926B"));
+        assertEquals("0x63ffd4aa844f4befcee1b4606e467d1d209a926b",
+                RuleRequest.normalizePolicyId("0X63FFD4AA844F4BEFCEE1B4606E467D1D209A926B"));
+
+        // Cardano 56-hex chars
+        assertEquals("79371b11f083d53ba85ec2171f45bdd1d503d1b43f02c5f29dc3ab37",
+                RuleRequest.normalizePolicyId("79371B11F083D53BA85EC2171F45BDD1D503D1B43F02C5F29DC3AB37"));
+
+        // Solana Base58 - case MUST be preserved
+        assertEquals("n54ZwXEcLnc3o7zK48nhrLV4KTU5wWD4iq7Gvdt5tik",
+                RuleRequest.normalizePolicyId("n54ZwXEcLnc3o7zK48nhrLV4KTU5wWD4iq7Gvdt5tik"));
+
+        // Null and whitespace
+        assertNull(RuleRequest.normalizePolicyId(null));
+        assertEquals("0x63ffd4aa844f4befcee1b4606e467d1d209a926b",
+                RuleRequest.normalizePolicyId("  0x63FFd4aA844f4BEFCee1B4606E467D1D209A926B  "));
+    }
+
+    @Test
+    void testRuleRequestConstructorNormalizesPolicyId() {
+        RuleRequest req = new RuleRequest("role-1", "0x63FFd4aA844f4BEFCee1B4606E467D1D209A926B", 1000L, null);
+        assertEquals("0x63ffd4aa844f4befcee1b4606e467d1d209a926b", req.policyId());
+    }
+
+    @Test
+    void testGetRuleMatchingQuantityCaseInsensitiveForEvm() {
+        RoleEvaluationService service = spy(new RoleEvaluationService());
+
+        GuildRoleRule rule = new GuildRoleRule();
+        rule.id = 2366L;
+        rule.policyId = "0x63FFd4aA844f4BEFCee1B4606E467D1D209A926B";
+        rule.minQuantity = 1000L;
+
+        UserAssetInventory item = new UserAssetInventory();
+        item.id = new UserAssetInventory.InventoryId("addr-1", "0x63ffd4aa844f4befcee1b4606e467d1d209a926b", "");
+        item.quantity = 5000L;
+
+        doReturn(List.of(item)).when(service).findInventoryForPolicy(
+                eq(List.of("addr-1")),
+                eq("0x63FFd4aA844f4BEFCee1B4606E467D1D209A926B"),
+                eq("0x63ffd4aa844f4befcee1b4606e467d1d209a926b")
+        );
+
+        long qty = service.getRuleMatchingQuantity("user-1", List.of("addr-1"), rule);
+        assertEquals(5000L, qty);
     }
 }

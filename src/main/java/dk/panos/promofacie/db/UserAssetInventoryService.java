@@ -58,8 +58,9 @@ public class UserAssetInventoryService {
                             e);
                 }
 
+                String pid = dk.panos.promofacie.controller.model.RuleRequest.normalizePolicyId(amt.policyId());
                 UserAssetInventory.InventoryId id = new UserAssetInventory.InventoryId(
-                        stakeAddress, amt.policyId(), amt.assetName());
+                        stakeAddress, pid != null ? pid : amt.policyId(), amt.assetName());
 
                 UserAssetInventory item = aggregated.get(id);
                 if (item == null) {

@@ -31,6 +31,24 @@ public record RuleRequest(
         @JsonProperty("chain")
         String chain
 ) {
+    public RuleRequest {
+        if (policyId != null) {
+            policyId = normalizePolicyId(policyId);
+        }
+    }
+
+    public static String normalizePolicyId(String pid) {
+        if (pid == null) return null;
+        String trimmed = pid.trim();
+        if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+            return trimmed.toLowerCase();
+        }
+        if (trimmed.length() == 56 && trimmed.matches("^[0-9a-fA-F]{56}$")) {
+            return trimmed.toLowerCase();
+        }
+        return trimmed;
+    }
+
     public RuleRequest(String roleId, String policyId, Long minQuantity, List<CriteriaRequest> criteria) {
         this(roleId, policyId, minQuantity, null, criteria, null, null, null, null);
     }

@@ -1,6 +1,10 @@
 package dk.panos.promofacie.service;
 
+import dk.panos.promofacie.db.Chain;
 import dk.panos.promofacie.db.PendingUserEvaluation;
+import dk.panos.promofacie.db.Wallet;
+import dk.panos.promofacie.db.WalletPersistenceService;
+import dk.panos.promofacie.kafka.model.TrackingCommand;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
@@ -16,10 +20,13 @@ import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
+import org.eclipse.microprofile.reactive.messaging.Channel;
+import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.List;
 
 @ApplicationScoped
 public class DiscordSlashCommandListener extends ListenerAdapter {
@@ -30,6 +37,21 @@ public class DiscordSlashCommandListener extends ListenerAdapter {
 
     @Inject
     JDA jda;
+
+    @Inject
+    @Channel("wallet-tracking-out")
+    Emitter<TrackingCommand> trackingEmitter;
+
+    @Inject
+    @Channel("robinhood-tracking-out")
+    Emitter<TrackingCommand> robinhoodTrackingEmitter;
+
+    @Inject
+    @Channel("solana-tracking-out")
+    Emitter<TrackingCommand> solanaTrackingEmitter;
+
+    @Inject
+    WalletPersistenceService walletPersistenceService;
 
     void onStart(@Observes StartupEvent ev) {
         if (jda != null) {
@@ -77,6 +99,7 @@ public class DiscordSlashCommandListener extends ListenerAdapter {
         }
 
         try {
+            triggerWalletRefresh(targetUser.getId());
             enqueueUserEvaluation(guild.getId(), targetUser.getId());
             event.reply("⏳ Role recalculation has been queued for " + targetUser.getAsMention() + ".")
                     .setEphemeral(true)
@@ -87,6 +110,50 @@ public class DiscordSlashCommandListener extends ListenerAdapter {
             event.reply("❌ Failed to queue role recalculation: " + e.getMessage())
                     .setEphemeral(true)
                     .queue();
+        }
+    }
+
+    public void triggerWalletRefresh(String discordId) {
+        if (walletPersistenceService == null) {
+            return;
+        }
+        try {
+            List<Wallet> wallets = walletPersistenceService.findByDiscordId(discordId);
+            log.info("[DiscordSlashCommand] Found {} linked wallet(s) to refresh for user {}", wallets.size(), discordId);
+            for (Wallet wallet : wallets) {
+                Chain chain = wallet.getChain();
+                TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null);
+                if (chain == Chain.SOLANA && solanaTrackingEmitter != null) {
+                    log.info("[DiscordSlashCommand] Broadcasting ADD_ADDRESS to solana for address={}", wallet.getAddress());
+                    solanaTrackingEmitter.send(cmd).whenComplete((res, ex) -> {
+                        if (ex != null) {
+                            log.error("[DiscordSlashCommand] Failed to send ADD_ADDRESS to solana for address={}", wallet.getAddress(), ex);
+                        } else {
+                            log.info("[DiscordSlashCommand] Successfully sent ADD_ADDRESS to solana for address: {}", wallet.getAddress());
+                        }
+                    });
+                } else if (chain == Chain.ROBINHOOD && robinhoodTrackingEmitter != null) {
+                    log.info("[DiscordSlashCommand] Broadcasting ADD_ADDRESS to robinhood for address={}", wallet.getAddress());
+                    robinhoodTrackingEmitter.send(cmd).whenComplete((res, ex) -> {
+                        if (ex != null) {
+                            log.error("[DiscordSlashCommand] Failed to send ADD_ADDRESS to robinhood for address={}", wallet.getAddress(), ex);
+                        } else {
+                            log.info("[DiscordSlashCommand] Successfully sent ADD_ADDRESS to robinhood for address: {}", wallet.getAddress());
+                        }
+                    });
+                } else if (trackingEmitter != null) {
+                    log.info("[DiscordSlashCommand] Broadcasting ADD_ADDRESS to cardano for stakeAddress={}", wallet.getAddress());
+                    trackingEmitter.send(cmd).whenComplete((res, ex) -> {
+                        if (ex != null) {
+                            log.error("[DiscordSlashCommand] Failed to send ADD_ADDRESS to cardano for stakeAddress={}", wallet.getAddress(), ex);
+                        } else {
+                            log.info("[DiscordSlashCommand] Successfully sent ADD_ADDRESS to cardano for stakeAddress: {}", wallet.getAddress());
+                        }
+                    });
+                }
+            }
+        } catch (Exception e) {
+            log.error("[DiscordSlashCommand] Failed during wallet refresh broadcast for user {}", discordId, e);
         }
     }
 

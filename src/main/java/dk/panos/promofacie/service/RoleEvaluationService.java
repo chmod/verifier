@@ -15,10 +15,12 @@ import net.dv8tion.jda.api.entities.Member;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import dk.panos.promofacie.controller.model.RuleRequest;
 
 @ApplicationScoped
 public class RoleEvaluationService {
@@ -53,7 +55,12 @@ public class RoleEvaluationService {
         List<Wallet> userWallets = Wallet.list("discordId = ?1", discordId);
         List<String> walletAddresses = userWallets.stream().map(Wallet::getAddress).toList();
 
-        List<GuildRoleRule> matchedRules = GuildRoleRule.list("policyId in ?1", changedPolicies);
+        Set<String> searchPolicies = new HashSet<>(changedPolicies);
+        for (String p : changedPolicies) {
+            String norm = RuleRequest.normalizePolicyId(p);
+            if (norm != null) searchPolicies.add(norm);
+        }
+        List<GuildRoleRule> matchedRules = GuildRoleRule.list("policyId in ?1 or lower(policyId) in ?1", searchPolicies);
         log.info("[RoleEvaluation] Found {} matched rule(s) for changed policies", matchedRules.size());
 
         // Group the matched rules by (guildId, roleId) to execute a single aggregated evaluation per role
@@ -243,11 +250,8 @@ public class RoleEvaluationService {
             return 0;
         }
 
-        List<UserAssetInventory> inventoryItems = UserAssetInventory.list(
-                "id.stakeAddress in ?1 and id.policyId = ?2",
-                walletAddresses,
-                rule.policyId
-        );
+        String normalizedPolicyId = RuleRequest.normalizePolicyId(rule.policyId);
+        List<UserAssetInventory> inventoryItems = findInventoryForPolicy(walletAddresses, rule.policyId, normalizedPolicyId);
 
         log.info("[RoleEvaluation]   User {} has {} inventory items matching policyId {}",
                 discordId, inventoryItems.size(), rule.policyId);
@@ -279,6 +283,23 @@ public class RoleEvaluationService {
 
     List<GuildRoleRule> getRulesForRole(String guildId, String roleId) {
         return GuildRoleRule.list("guildId = ?1 and roleId = ?2", guildId, roleId);
+    }
+
+    List<UserAssetInventory> findInventoryForPolicy(List<String> walletAddresses, String rulePolicyId, String normalizedPolicyId) {
+        if (normalizedPolicyId != null && !normalizedPolicyId.equals(rulePolicyId)) {
+            return UserAssetInventory.list(
+                    "id.stakeAddress in ?1 and (id.policyId = ?2 or id.policyId = ?3)",
+                    walletAddresses,
+                    rulePolicyId,
+                    normalizedPolicyId
+            );
+        } else {
+            return UserAssetInventory.list(
+                    "id.stakeAddress in ?1 and id.policyId = ?2",
+                    walletAddresses,
+                    rulePolicyId
+            );
+        }
     }
 
     @Transactional

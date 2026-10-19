@@ -31,6 +31,7 @@ public class RuleRegistrationService {
         log.info("[RuleRegistration] Registering rule for guild={}, policy={}, role={}, chain={}",
                 rule.guildId, rule.policyId, rule.roleId, rule.getResolvedChain());
 
+        rule.policyId = dk.panos.promofacie.controller.model.RuleRequest.normalizePolicyId(rule.policyId);
         rule.persist();
 
         // Broadcast ADD_POLICY to appropriate indexer (Solana, Robinhood, or Cardano)
@@ -92,7 +93,7 @@ public class RuleRegistrationService {
             rule.delete();
             
             // Check if any other rules exist for this policyId
-            long count = GuildRoleRule.count("policyId = ?1", policyId);
+            long count = GuildRoleRule.count("policyId = ?1 or lower(policyId) = lower(?1)", policyId);
             if (count == 0) {
                 log.info("[RuleRegistration] No rules remaining for policyId={} — broadcasting REMOVE_POLICY", policyId);
                 TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.REMOVE_POLICY, null, policyId);

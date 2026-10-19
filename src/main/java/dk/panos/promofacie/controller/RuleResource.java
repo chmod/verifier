@@ -410,11 +410,11 @@ public class RuleResource {
     }
 
     long countPolicyGlobally(String policyId) {
-        return GuildRoleRule.count("policyId = ?1", policyId);
+        return GuildRoleRule.count("policyId = ?1 or lower(policyId) = lower(?1)", policyId);
     }
 
     long countPolicyInOtherGuilds(String policyId, String guild) {
-        return GuildRoleRule.count("policyId = ?1 and guildId != ?2", policyId, guild);
+        return GuildRoleRule.count("(policyId = ?1 or lower(policyId) = lower(?1)) and guildId != ?2", policyId, guild);
     }
 
     void deletePendingEvaluations(Long ruleId) {
