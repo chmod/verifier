@@ -27,6 +27,7 @@ class WalletVerificationResourceTest {
     private Emitter<TrackingCommand> emitterMock;
     private Emitter<TrackingCommand> solanaEmitterMock;
     private WalletPersistenceService persistenceServiceMock;
+    private dk.panos.promofacie.service.RoleEvaluationService roleEvaluationServiceMock;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -36,11 +37,13 @@ class WalletVerificationResourceTest {
         emitterMock = mock(Emitter.class);
         solanaEmitterMock = mock(Emitter.class);
         persistenceServiceMock = mock(WalletPersistenceService.class);
+        roleEvaluationServiceMock = mock(dk.panos.promofacie.service.RoleEvaluationService.class);
 
         resource.jwt = jwtMock;
         resource.walletTrackingEmitter = emitterMock;
         resource.solanaTrackingEmitter = solanaEmitterMock;
         resource.walletPersistenceService = persistenceServiceMock;
+        resource.roleEvaluationService = roleEvaluationServiceMock;
 
         when(emitterMock.send(any(TrackingCommand.class))).thenReturn(CompletableFuture.completedFuture(null));
         when(solanaEmitterMock.send(any(TrackingCommand.class))).thenReturn(CompletableFuture.completedFuture(null));
@@ -124,6 +127,7 @@ class WalletVerificationResourceTest {
         assertEquals("stake1address1", captor.getValue().stakeAddress());
 
         verify(persistenceServiceMock, times(1)).deleteByAddressAndDiscordId("stake1address1", "user-discord-123");
+        verify(roleEvaluationServiceMock, times(1)).enqueueUserEvaluationForAllGuilds("user-discord-123");
     }
 
     @Test
@@ -150,6 +154,7 @@ class WalletVerificationResourceTest {
         assertEquals("stake1address1", captor.getValue().stakeAddress());
 
         verify(persistenceServiceMock, times(1)).deleteAllByDiscordId("user-discord-123");
+        verify(roleEvaluationServiceMock, times(1)).enqueueUserEvaluationForAllGuilds("user-discord-123");
     }
 
     @Test
@@ -182,6 +187,7 @@ class WalletVerificationResourceTest {
         assertEquals(Response.Status.OK.getStatusCode(), verifyRes.getStatus());
 
         verify(persistenceServiceMock, times(1)).persist(solAddress, "solana-user-456", Chain.SOLANA);
+        verify(roleEvaluationServiceMock, times(1)).enqueueUserEvaluationForAllGuilds("solana-user-456");
 
         ArgumentCaptor<TrackingCommand> captor = ArgumentCaptor.forClass(TrackingCommand.class);
         verify(solanaEmitterMock, times(1)).send(captor.capture());

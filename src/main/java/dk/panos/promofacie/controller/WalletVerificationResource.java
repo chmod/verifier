@@ -6,6 +6,7 @@ import dk.panos.promofacie.controller.model.WalletAssociationResponse;
 import dk.panos.promofacie.db.Chain;
 import dk.panos.promofacie.db.Wallet;
 import dk.panos.promofacie.db.WalletPersistenceService;
+import dk.panos.promofacie.service.RoleEvaluationService;
 import dk.panos.promofacie.kafka.model.TrackingCommand;
 import io.quarkus.security.Authenticated;
 import jakarta.inject.Inject;
@@ -64,6 +65,9 @@ public class WalletVerificationResource {
 
     @Inject
     WalletPersistenceService walletPersistenceService;
+
+    @Inject
+    RoleEvaluationService roleEvaluationService;
 
     private final ConcurrentHashMap<String, NonceEntry> nonces = new ConcurrentHashMap<>();
 
@@ -135,6 +139,11 @@ public class WalletVerificationResource {
 
         // 1. Synchronously persist or reassign in database
         walletPersistenceService.persist(resolvedAddress, discordId, targetChain);
+
+        // Enqueue role recalculation for user across all configured guilds
+        if (roleEvaluationService != null) {
+            roleEvaluationService.enqueueUserEvaluationForAllGuilds(discordId);
+        }
 
         // 2. Broadcast tracking command to Kafka
         TrackingCommand cmd = new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, resolvedAddress, null);
@@ -254,6 +263,9 @@ public class WalletVerificationResource {
             }
 
             walletPersistenceService.deleteByAddressAndDiscordId(targetAddress, discordId);
+            if (roleEvaluationService != null) {
+                roleEvaluationService.enqueueUserEvaluationForAllGuilds(discordId);
+            }
             return Response.ok(Map.of("message", "Wallet association unlinked successfully")).build();
         } else {
             List<Wallet> wallets = walletPersistenceService.findByDiscordId(discordId);
@@ -290,6 +302,9 @@ public class WalletVerificationResource {
             }
 
             long deletedCount = walletPersistenceService.deleteAllByDiscordId(discordId);
+            if (roleEvaluationService != null) {
+                roleEvaluationService.enqueueUserEvaluationForAllGuilds(discordId);
+            }
             return Response.ok(Map.of("message", "All wallet associations unlinked successfully", "count", deletedCount)).build();
         }
     }

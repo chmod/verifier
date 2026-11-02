@@ -4,6 +4,7 @@ import dk.panos.promofacie.db.GuildRoleRule;
 import dk.panos.promofacie.db.RuleTraitCriteria;
 import dk.panos.promofacie.db.UserAssetInventory;
 import dk.panos.promofacie.db.Wallet;
+import dk.panos.promofacie.db.PendingUserEvaluation;
 import dk.panos.promofacie.db.RoleSyncOutbox;
 import dk.panos.promofacie.db.TargetState;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -15,6 +16,7 @@ import net.dv8tion.jda.api.entities.Member;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -324,5 +326,41 @@ public class RoleEvaluationService {
 
         log.info("[RoleEvaluation] Recalculated {} unique role(s) for user {} in guild {}",
                 uniqueRoleIds.size(), discordId, guildId);
+    }
+
+    @Transactional
+    public void enqueueUserEvaluation(String guildId, String discordId) {
+        long pendingCount = PendingUserEvaluation.count(
+                "guildId = ?1 and discordId = ?2 and (status = 'PENDING' or status = 'PROCESSING')",
+                guildId, discordId
+        );
+        if (pendingCount == 0) {
+            PendingUserEvaluation eval = new PendingUserEvaluation();
+            eval.guildId = guildId;
+            eval.discordId = discordId;
+            eval.status = "PENDING";
+            eval.retryCount = 0;
+            eval.createdAt = Instant.now();
+            eval.updatedAt = Instant.now();
+            eval.persist();
+            log.info("[RoleEvaluation] Enqueued PendingUserEvaluation for user {} in guild {}", discordId, guildId);
+        } else {
+            log.info("[RoleEvaluation] Evaluation already pending/processing for user {} in guild {}", discordId, guildId);
+        }
+    }
+
+    @Transactional
+    public void enqueueUserEvaluationForAllGuilds(String discordId) {
+        if (discordId == null || discordId.isBlank()) {
+            return;
+        }
+        List<String> guildIds = GuildRoleRule.getEntityManager()
+                .createQuery("select distinct r.guildId from GuildRoleRule r", String.class)
+                .getResultList();
+        log.info("[RoleEvaluation] Enqueuing user evaluation for user {} across {} configured guild(s)",
+                discordId, guildIds.size());
+        for (String guildId : guildIds) {
+            enqueueUserEvaluation(guildId, discordId);
+        }
     }
 }

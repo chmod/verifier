@@ -53,6 +53,9 @@ public class DiscordSlashCommandListener extends ListenerAdapter {
     @Inject
     WalletPersistenceService walletPersistenceService;
 
+    @Inject
+    RoleEvaluationService roleEvaluationService;
+
     void onStart(@Observes StartupEvent ev) {
         if (jda != null) {
             try {
@@ -159,22 +162,26 @@ public class DiscordSlashCommandListener extends ListenerAdapter {
 
     @Transactional
     public void enqueueUserEvaluation(String guildId, String discordId) {
-        long pendingCount = PendingUserEvaluation.count(
-                "guildId = ?1 and discordId = ?2 and (status = 'PENDING' or status = 'PROCESSING')",
-                guildId, discordId
-        );
-        if (pendingCount == 0) {
-            PendingUserEvaluation eval = new PendingUserEvaluation();
-            eval.guildId = guildId;
-            eval.discordId = discordId;
-            eval.status = "PENDING";
-            eval.retryCount = 0;
-            eval.createdAt = Instant.now();
-            eval.updatedAt = Instant.now();
-            eval.persist();
-            log.info("[DiscordSlashCommand] Enqueued PendingUserEvaluation for user {} in guild {}", discordId, guildId);
+        if (roleEvaluationService != null) {
+            roleEvaluationService.enqueueUserEvaluation(guildId, discordId);
         } else {
-            log.info("[DiscordSlashCommand] Evaluation already pending/processing for user {} in guild {}", discordId, guildId);
+            long pendingCount = PendingUserEvaluation.count(
+                    "guildId = ?1 and discordId = ?2 and (status = 'PENDING' or status = 'PROCESSING')",
+                    guildId, discordId
+            );
+            if (pendingCount == 0) {
+                PendingUserEvaluation eval = new PendingUserEvaluation();
+                eval.guildId = guildId;
+                eval.discordId = discordId;
+                eval.status = "PENDING";
+                eval.retryCount = 0;
+                eval.createdAt = Instant.now();
+                eval.updatedAt = Instant.now();
+                eval.persist();
+                log.info("[DiscordSlashCommand] Enqueued PendingUserEvaluation for user {} in guild {}", discordId, guildId);
+            } else {
+                log.info("[DiscordSlashCommand] Evaluation already pending/processing for user {} in guild {}", discordId, guildId);
+            }
         }
     }
 }

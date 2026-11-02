@@ -21,6 +21,7 @@ import jakarta.transaction.Transactional;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class UtxoTransactionConsumer {
@@ -83,13 +84,7 @@ public class UtxoTransactionConsumer {
     @Transactional
     void processSnapshotAndEvaluate(UtxoTransactionPayload payload, boolean isRollback) {
         // 1. Fetch "before" inventory as a read-only projection (including lastUpdatedSlot) in a single query
-        List<InventoryRow> beforeRows = UserAssetInventory.getEntityManager()
-                .createQuery(
-                        "select new dk.panos.promofacie.db.InventoryRow(u.id.policyId, u.id.assetNameHex, u.quantity, u.traits, u.lastUpdatedSlot) " +
-                                "from UserAssetInventory u where u.id.stakeAddress = ?1",
-                        InventoryRow.class)
-                .setParameter(1, payload.stakeAddress())
-                .getResultList();
+        List<InventoryRow> beforeRows = fetchInventoryRows(payload.stakeAddress());
         WalletInventorySnapshot before = entityMapper.mapRows(beforeRows);
 
         log.info("[UtxoConsumer] DB state before processing for stakeAddress {} contains {} asset holdings.",
@@ -157,12 +152,33 @@ public class UtxoTransactionConsumer {
         userAssetInventoryService.handleSnapshot(payload, resolvedSlot);
 
         // 6. Enqueue role sync updates if policies have changed, using the resolved slot
-        if (!changedPolicies.isEmpty()) {
-            log.info("[UtxoConsumer] Policy changes detected: {}. Enqueuing outbox role updates.", changedPolicies);
-            roleEvaluationService.enqueueRoleUpdates(payload.stakeAddress(), changedPolicies, resolvedSlot);
+        Set<String> policiesToEvaluate = changedPolicies;
+        if (policiesToEvaluate.isEmpty() && payload.snapshot()) {
+            policiesToEvaluate = after.holdings().stream()
+                    .map(AssetHolding::policyId)
+                    .collect(Collectors.toSet());
+            if (!policiesToEvaluate.isEmpty()) {
+                log.info("[UtxoConsumer] Snapshot contains 0 diff but has {} policy/policies in holdings. Enqueuing outbox role updates.",
+                        policiesToEvaluate.size());
+            }
+        }
+
+        if (!policiesToEvaluate.isEmpty()) {
+            log.info("[UtxoConsumer] Policy changes detected: {}. Enqueuing outbox role updates.", policiesToEvaluate);
+            roleEvaluationService.enqueueRoleUpdates(payload.stakeAddress(), policiesToEvaluate, resolvedSlot);
         } else {
             log.info("[UtxoConsumer] No policy changes detected for stakeAddress {}. Skipping outbox role updates.",
                     payload.stakeAddress());
         }
+    }
+
+    List<InventoryRow> fetchInventoryRows(String stakeAddress) {
+        return UserAssetInventory.getEntityManager()
+                .createQuery(
+                        "select new dk.panos.promofacie.db.InventoryRow(u.id.policyId, u.id.assetNameHex, u.quantity, u.traits, u.lastUpdatedSlot) " +
+                                "from UserAssetInventory u where u.id.stakeAddress = ?1",
+                        InventoryRow.class)
+                .setParameter(1, stakeAddress)
+                .getResultList();
     }
 }

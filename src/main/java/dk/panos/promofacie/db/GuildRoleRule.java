@@ -19,7 +19,7 @@ public class GuildRoleRule extends PanacheEntity {
     @Column(name = "role_id", nullable = false)
     public String roleId;
 
-    @Column(name = "policy_id", length = 64, nullable = false)
+    @Column(name = "policy_id", length = 128, nullable = false)
     public String policyId;
 
     @Column(name = "min_quantity", nullable = false)
