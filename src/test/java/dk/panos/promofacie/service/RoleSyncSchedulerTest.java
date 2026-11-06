@@ -61,11 +61,13 @@ class RoleSyncSchedulerTest {
         Role role2 = mock(Role.class);
         when(guild.getRoleById("role-1")).thenReturn(role1);
         when(guild.getRoleById("role-2")).thenReturn(role2);
+        // Member currently holds role-2 (to be removed) and lacks role-1 (to be added)
+        when(member.getRoles()).thenReturn(List.of(role2));
 
         AuditableRestAction<Void> restAction = mock(AuditableRestAction.class);
         CompletableFuture<Void> future = CompletableFuture.completedFuture(null);
         when(restAction.submit()).thenReturn(future);
-        
+
         when(guild.modifyMemberRoles(eq(member), any(List.class), any(List.class))).thenReturn(restAction);
 
         doNothing().when(scheduler).markTasksDone(any());

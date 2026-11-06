@@ -196,9 +196,15 @@ public class RoleEvaluationService {
                 Guild guild = jda.getGuildById(guildId);
                 if (guild != null) {
                     Member member = guild.getMemberById(discordId);
-                    if (member != null) {
-                        hasRole = member.getRoles().stream().anyMatch(r -> r.getId().equals(roleId));
+                    if (member == null) {
+                        // The member cache is complete (GUILD_MEMBERS intent + ChunkingFilter.ALL), so a
+                        // cache miss means the user is not in this guild. Enqueuing would only produce a
+                        // REST lookup that fails with 404 Unknown Member on every re-evaluation.
+                        log.debug("[RoleEvaluation] User {} is not a member of guild {} — skipping outbox task for role {}",
+                                discordId, guildId, roleId);
+                        return false;
                     }
+                    hasRole = member.getRoles().stream().anyMatch(r -> r.getId().equals(roleId));
                 }
             } catch (Exception e) {
                 log.warn("[RoleEvaluation] Failed to look up member {}/guild {} roles in JDA cache: {}", discordId, guildId, e.getMessage());
@@ -326,6 +332,25 @@ public class RoleEvaluationService {
 
         log.info("[RoleEvaluation] Recalculated {} unique role(s) for user {} in guild {}",
                 uniqueRoleIds.size(), discordId, guildId);
+    }
+
+    /**
+     * Called when a member joins a guild. Members who left and rejoined (or verified before joining)
+     * are skipped by evaluation while they're not in the guild, so they need a fresh evaluation here.
+     * Only enqueues when the user has linked wallets and the guild has rules configured.
+     */
+    @Transactional
+    public void enqueueEvaluationOnMemberJoin(String guildId, String discordId) {
+        if (Wallet.count("discordId = ?1", discordId) == 0) {
+            log.debug("[RoleEvaluation] Member {} joined guild {} but has no linked wallets — skipping", discordId, guildId);
+            return;
+        }
+        if (GuildRoleRule.count("guildId = ?1", guildId) == 0) {
+            log.debug("[RoleEvaluation] Member {} joined guild {} which has no rules — skipping", discordId, guildId);
+            return;
+        }
+        log.info("[RoleEvaluation] Member {} with linked wallet(s) joined guild {} — enqueuing evaluation", discordId, guildId);
+        enqueueUserEvaluation(guildId, discordId);
     }
 
     @Transactional
