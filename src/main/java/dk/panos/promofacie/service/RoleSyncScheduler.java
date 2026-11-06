@@ -158,6 +158,19 @@ public class RoleSyncScheduler {
                 return;
             }
 
+            // Skip no-op changes: re-evaluations often re-enqueue a role the member already has
+            // (or already lacks). The member's roles are kept current via GUILD_MEMBERS events.
+            List<Role> currentRoles = member.getRoles();
+            rolesToAdd.removeIf(currentRoles::contains);
+            rolesToRemove.removeIf(r -> !currentRoles.contains(r));
+
+            if (rolesToAdd.isEmpty() && rolesToRemove.isEmpty()) {
+                log.info("[RoleSyncScheduler] User {} in guild {} already in target role state — marking {} task(s) DONE without Discord call",
+                        discordId, guildId, appliedTasks.size());
+                markTasksDone(appliedTasks);
+                return;
+            }
+
             log.info("[RoleSyncScheduler] Executing JDA batch modify roles for user {} in guild {}: adding {} role(s), removing {} role(s)",
                     discordId, guildId, rolesToAdd.size(), rolesToRemove.size());
             for (Role r : rolesToAdd) {
