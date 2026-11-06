@@ -66,7 +66,7 @@ class RuleEvaluationSchedulerTest {
 
         GuildRoleRule rule = goldRule();
         doReturn(List.of(task(100L, 1L))).when(scheduler).acquirePendingEvaluations();
-        doReturn(rule).when(scheduler).getRuleById(1L);
+        doReturn(Set.of("role-gold")).when(scheduler).loadRoleIdsForRules(List.of(1L));
         doReturn(List.of(rule)).when(scheduler).loadRulesForRoles("guild-1", Set.of("role-gold"));
 
         UserAssetInventory holding = new UserAssetInventory();

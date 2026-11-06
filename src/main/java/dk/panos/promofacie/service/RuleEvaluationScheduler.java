@@ -87,15 +87,8 @@ public class RuleEvaluationScheduler {
             List<Member> members = guild.getMembers();
             log.info("[RuleEvaluationScheduler] Found {} member(s) in JDA cache for guild {}", members.size(), guildId);
 
-            Set<String> roleIds = new HashSet<>();
-            for (PendingRuleEvaluation task : tasks) {
-                GuildRoleRule rule = getRuleById(task.ruleId);
-                if (rule != null) {
-                    roleIds.add(rule.roleId);
-                } else {
-                    log.warn("[RuleEvaluationScheduler] GuildRoleRule with id={} not found for task {}", task.ruleId, task.id);
-                }
-            }
+            // Tasks only identify which roles to re-evaluate; one query instead of one per task
+            Set<String> roleIds = loadRoleIdsForRules(tasks.stream().map(t -> t.ruleId).toList());
 
             if (roleIds.isEmpty()) {
                 log.info("[RuleEvaluationScheduler] No valid rules to evaluate for guild {}", guildId);
@@ -181,9 +174,16 @@ public class RuleEvaluationScheduler {
         return acquired;
     }
 
+    /** Distinct role ids of the given rules. Rules deleted since the task was queued are simply absent. */
     @Transactional
-    public GuildRoleRule getRuleById(Long id) {
-        return GuildRoleRule.find("from GuildRoleRule r left join fetch r.criteria where r.id = ?1", id).firstResult();
+    public Set<String> loadRoleIdsForRules(List<Long> ruleIds) {
+        if (ruleIds.isEmpty()) {
+            return Set.of();
+        }
+        return new HashSet<>(GuildRoleRule.getEntityManager()
+                .createQuery("select distinct r.roleId from GuildRoleRule r where r.id in ?1", String.class)
+                .setParameter(1, ruleIds)
+                .getResultList());
     }
 
     /** All rules of the given roles in the guild, with trait criteria fetched (used after the transaction closes). */
