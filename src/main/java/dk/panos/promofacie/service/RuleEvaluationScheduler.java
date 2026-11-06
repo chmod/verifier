@@ -1,6 +1,8 @@
 package dk.panos.promofacie.service;
 
+import dk.panos.promofacie.controller.model.RuleRequest;
 import dk.panos.promofacie.db.PendingRuleEvaluation;
+import dk.panos.promofacie.db.RoleSyncOutbox;
 import dk.panos.promofacie.db.PendingUserEvaluation;
 import dk.panos.promofacie.db.GuildRoleRule;
 import dk.panos.promofacie.db.UserAssetInventory;
@@ -13,11 +15,14 @@ import jakarta.transaction.Transactional;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.entities.Role;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -40,12 +45,9 @@ public class RuleEvaluationScheduler {
     @Inject
     RoleSyncScheduler roleSyncScheduler;
 
+    // Rule and user evaluations are separate jobs so a long guild-wide rule evaluation never
+    // blocks member joins or /sync-roles requests.
     @Scheduled(every = "10s", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
-    public void processPendingEvaluations() {
-        processPendingRuleEvaluations();
-        processPendingUserEvaluations();
-    }
-
     public void processPendingRuleEvaluations() {
         List<PendingRuleEvaluation> acquired = acquirePendingEvaluations();
         if (acquired.isEmpty()) {
@@ -68,8 +70,12 @@ public class RuleEvaluationScheduler {
         }
     }
 
-    private void processGuildEvaluations(String guildId, List<PendingRuleEvaluation> tasks) {
+    void processGuildEvaluations(String guildId, List<PendingRuleEvaluation> tasks) {
         log.info("[RuleEvaluationScheduler] Starting rule evaluation for guild {} (tasks count: {})", guildId, tasks.size());
+        long startedAt = System.currentTimeMillis();
+        // One version for the whole run, taken before any data is loaded: an event-driven upsert that
+        // lands mid-run carries a newer version and wins over this run's (possibly older) view.
+        long evaluationVersion = startedAt;
         try {
             Guild guild = jda.getGuildById(guildId);
             if (guild == null) {
@@ -81,48 +87,70 @@ public class RuleEvaluationScheduler {
             List<Member> members = guild.getMembers();
             log.info("[RuleEvaluationScheduler] Found {} member(s) in JDA cache for guild {}", members.size(), guildId);
 
-            List<GuildRoleRule> rules = new ArrayList<>();
+            Set<String> roleIds = new HashSet<>();
             for (PendingRuleEvaluation task : tasks) {
                 GuildRoleRule rule = getRuleById(task.ruleId);
                 if (rule != null) {
-                    rules.add(rule);
+                    roleIds.add(rule.roleId);
                 } else {
                     log.warn("[RuleEvaluationScheduler] GuildRoleRule with id={} not found for task {}", task.ruleId, task.id);
                 }
             }
 
-            if (rules.isEmpty()) {
+            if (roleIds.isEmpty()) {
                 log.info("[RuleEvaluationScheduler] No valid rules to evaluate for guild {}", guildId);
                 markTasksDone(tasks);
                 return;
             }
 
-            // Group rules by roleId to run a single aggregated evaluation per role
-            Set<String> uniqueRoleIds = rules.stream()
-                    .map(r -> r.roleId)
-                    .collect(Collectors.toSet());
+            // Bulk-load everything once; the per-member loop below runs purely in memory.
+            // All rules of each affected role are needed, not just the rules named by the tasks.
+            Map<String, List<GuildRoleRule>> rulesByRole = loadRulesForRoles(guildId, roleIds).stream()
+                    .collect(Collectors.groupingBy(r -> r.roleId));
+            Set<String> policyIds = new HashSet<>();
+            for (List<GuildRoleRule> roleRules : rulesByRole.values()) {
+                for (GuildRoleRule r : roleRules) {
+                    policyIds.add(r.policyId);
+                    String normalized = RuleRequest.normalizePolicyId(r.policyId);
+                    if (normalized != null) policyIds.add(normalized);
+                }
+            }
+            Map<String, List<String>> walletsByDiscordId = loadWalletAddressesByDiscordId();
+            Map<String, List<UserAssetInventory>> inventoryByAddress = loadInventoryByAddress(policyIds);
+            Map<String, RoleSyncOutbox> outboxByUserRole = loadOutboxByUserRole(guildId, roleIds);
 
+            int membersWithWallets = 0;
+            int rowsWritten = 0;
             for (Member member : members) {
                 String discordId = member.getId();
-                if ("892629798772432906".equals(discordId)) {
-                    log.info("[RuleEvaluationScheduler] DEBUG USER 892629798772432906: found in JDA cache, roles: {}",
-                            member.getRoles().stream().map(r -> r.getName() + " (" + r.getId() + ")").toList());
+                List<String> addresses = walletsByDiscordId.getOrDefault(discordId, List.of());
+                List<UserAssetInventory> userInventory = new ArrayList<>();
+                for (String address : addresses) {
+                    userInventory.addAll(inventoryByAddress.getOrDefault(address, List.of()));
                 }
-                List<Wallet> wallets = getWalletsByDiscordId(discordId);
-                List<String> walletAddresses = wallets.stream().map(Wallet::getAddress).toList();
+                if (!addresses.isEmpty()) {
+                    membersWithWallets++;
+                }
+                Set<String> heldRoleIds = member.getRoles().stream().map(Role::getId).collect(Collectors.toSet());
 
-                long evaluationVersion = System.currentTimeMillis();
+                for (String roleId : roleIds) {
+                    List<GuildRoleRule> roleRules = rulesByRole.getOrDefault(roleId, List.of());
+                    boolean eligible = !roleRules.isEmpty() && roleEvaluationService.evaluateRules(discordId, roleRules,
+                            rule -> roleEvaluationService.matchingQuantityInMemory(userInventory, rule));
+                    TargetState targetState = eligible ? TargetState.PRESENT : TargetState.ABSENT;
 
-                for (String roleId : uniqueRoleIds) {
-                    boolean meetsGroupedRules = roleEvaluationService.evaluateRoleEligibility(discordId, walletAddresses, guildId, roleId);
-                    TargetState targetState = meetsGroupedRules ? TargetState.PRESENT : TargetState.ABSENT;
-
-                    roleEvaluationService.upsertOutboxTask(discordId, guildId, roleId, targetState, evaluationVersion);
+                    RoleSyncOutbox existing = outboxByUserRole.get(discordId + "|" + roleId);
+                    if (roleEvaluationService.isOutboxTaskNeeded(heldRoleIds.contains(roleId), targetState, existing)) {
+                        roleEvaluationService.upsertOutboxRow(discordId, guildId, roleId, targetState, evaluationVersion);
+                        rowsWritten++;
+                    }
                 }
             }
 
             markTasksDone(tasks);
-            log.info("[RuleEvaluationScheduler] Successfully completed rule evaluation sync for guild {}", guildId);
+            log.info("[RuleEvaluationScheduler] Successfully completed rule evaluation sync for guild {}: {} member(s) evaluated "
+                            + "({} with linked wallets) against {} role(s), {} outbox task(s) written, took {} ms",
+                    guildId, members.size(), membersWithWallets, roleIds.size(), rowsWritten, System.currentTimeMillis() - startedAt);
         } catch (Exception e) {
             log.error("[RuleEvaluationScheduler] Failed rule evaluation sync for guild {}", guildId, e);
             handleTasksFailure(tasks, e.getMessage() != null ? e.getMessage() : e.getClass().getName());
@@ -158,17 +186,46 @@ public class RuleEvaluationScheduler {
         return GuildRoleRule.find("from GuildRoleRule r left join fetch r.criteria where r.id = ?1", id).firstResult();
     }
 
+    /** All rules of the given roles in the guild, with trait criteria fetched (used after the transaction closes). */
     @Transactional
-    public List<Wallet> getWalletsByDiscordId(String discordId) {
-        return Wallet.list("discordId = ?1", discordId);
+    public List<GuildRoleRule> loadRulesForRoles(String guildId, Set<String> roleIds) {
+        // Hibernate 6 de-duplicates root entities of a fetch join, so no "distinct" is needed.
+        return GuildRoleRule.list("from GuildRoleRule r left join fetch r.criteria where r.guildId = ?1 and r.roleId in ?2",
+                guildId, roleIds);
     }
 
+    /** discordId -> wallet addresses, for all linked wallets. Avoids an IN list over (possibly huge) member ids. */
     @Transactional
-    public Long getMaxInventorySlot(List<String> walletAddresses) {
-        return UserAssetInventory.getEntityManager()
-                .createQuery("select max(u.lastUpdatedSlot) from UserAssetInventory u where u.id.stakeAddress in ?1", Long.class)
-                .setParameter(1, walletAddresses)
-                .getSingleResult();
+    public Map<String, List<String>> loadWalletAddressesByDiscordId() {
+        List<Object[]> rows = Wallet.getEntityManager()
+                .createQuery("select w.discordId, w.address from Wallet w", Object[].class)
+                .getResultList();
+        Map<String, List<String>> result = new HashMap<>();
+        for (Object[] row : rows) {
+            result.computeIfAbsent((String) row[0], k -> new ArrayList<>()).add((String) row[1]);
+        }
+        return result;
+    }
+
+    /** stakeAddress -> inventory rows, restricted to the given policy ids (raw and normalized forms). */
+    @Transactional
+    public Map<String, List<UserAssetInventory>> loadInventoryByAddress(Set<String> policyIds) {
+        if (policyIds.isEmpty()) {
+            return Map.of();
+        }
+        List<UserAssetInventory> rows = UserAssetInventory.list("id.policyId in ?1", policyIds);
+        return rows.stream().collect(Collectors.groupingBy(u -> u.id.stakeAddress));
+    }
+
+    /** "discordId|roleId" -> current outbox row for the guild's affected roles. */
+    @Transactional
+    public Map<String, RoleSyncOutbox> loadOutboxByUserRole(String guildId, Set<String> roleIds) {
+        List<RoleSyncOutbox> rows = RoleSyncOutbox.list("guildId = ?1 and roleId in ?2", guildId, roleIds);
+        Map<String, RoleSyncOutbox> result = new HashMap<>();
+        for (RoleSyncOutbox row : rows) {
+            result.put(row.discordId + "|" + row.roleId, row);
+        }
+        return result;
     }
 
     @Transactional
@@ -219,6 +276,7 @@ public class RuleEvaluationScheduler {
         }
     }
 
+    @Scheduled(every = "10s", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     public void processPendingUserEvaluations() {
         List<PendingUserEvaluation> acquired = acquirePendingUserEvaluations();
         if (acquired.isEmpty()) {

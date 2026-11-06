@@ -438,6 +438,12 @@ public class RuleResource {
     }
 
     List<dk.panos.promofacie.db.Wallet> getWalletsForDiscordIds(List<String> discordIds) {
-        return dk.panos.promofacie.db.Wallet.list("discordId in ?1", discordIds);
+        // discordIds is every member of the guild. An "in ?1" query binds one parameter per id and
+        // Postgres caps a statement at 32767 parameters, so large guilds would fail. Wallets are far
+        // fewer than members: load them all and filter in memory.
+        Set<String> ids = new HashSet<>(discordIds);
+        return dk.panos.promofacie.db.Wallet.<dk.panos.promofacie.db.Wallet>listAll().stream()
+                .filter(w -> ids.contains(w.getDiscordId()))
+                .toList();
     }
 }

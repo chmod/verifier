@@ -314,4 +314,118 @@ class RoleEvaluationServiceTest {
         long qty = service.getRuleMatchingQuantity("user-1", List.of("addr-1"), rule);
         assertEquals(5000L, qty);
     }
+
+    // --- Equivalence: in-memory bulk path vs DB-backed per-user path -------------------------------
+
+    private static GuildRoleRule rule(long id, String roleId, String policyId, long min, Long max, int group, boolean isAnd) {
+        GuildRoleRule r = new GuildRoleRule();
+        r.id = id;
+        r.guildId = "guild-1";
+        r.roleId = roleId;
+        r.policyId = policyId;
+        r.minQuantity = min;
+        r.maxQuantity = max;
+        r.ruleGroup = group;
+        r.isAnd = isAnd;
+        return r;
+    }
+
+    private static UserAssetInventory item(String address, String policyId, String asset, long qty, Map<String, String> traits) {
+        UserAssetInventory i = new UserAssetInventory();
+        i.id = new UserAssetInventory.InventoryId(address, policyId, asset);
+        i.quantity = qty;
+        i.traits = traits;
+        return i;
+    }
+
+    @Test
+    void testInMemoryEvaluationMatchesDbBackedEvaluation() {
+        String cardanoUpper = "D620AEF3DE3244CDBA016CB9616A6516679C0A1FE560FFD9152452B5";
+        String cardanoLower = cardanoUpper.toLowerCase();
+        String evmMixed = "0x63FFd4aA844f4BEFCee1B4606E467D1D209A926B";
+        String evmLower = evmMixed.toLowerCase();
+
+        // role-and: AND group (cardano upper-case rule + trait-gated NFT rule)
+        GuildRoleRule andCardano = rule(1, "role-and", cardanoUpper, 100, null, 1, true);
+        GuildRoleRule andTrait = rule(2, "role-and", "policy-nft", 2, null, 1, true);
+        RuleTraitCriteria golden = new RuleTraitCriteria();
+        golden.traitKey = "Background";
+        golden.traitValue = "Golden";
+        andTrait.addCriteria(golden);
+        // role-sum: SUM group with a max, OR'ed with a single EVM rule group
+        GuildRoleRule sumA = rule(3, "role-sum", "policy-a", 5, 10L, 2, false);
+        GuildRoleRule sumB = rule(4, "role-sum", "policy-b", 5, 10L, 2, false);
+        GuildRoleRule evm = rule(5, "role-sum", evmMixed, 1000, null, 3, false);
+        Map<String, List<GuildRoleRule>> rulesByRole = Map.of(
+                "role-and", List.of(andCardano, andTrait),
+                "role-sum", List.of(sumA, sumB, evm));
+
+        // Inventory rows as stored (policy ids as the indexers write them)
+        List<UserAssetInventory> all = List.of(
+                item("addr-1", cardanoLower, "snek", 150, Map.of()),
+                item("addr-1", "policy-nft", "nft-1", 1, Map.of("Background", "Golden")),
+                item("addr-2", "policy-nft", "nft-2", 1, Map.of("Background", "golden")),
+                item("addr-2", "policy-nft", "nft-3", 1, Map.of("Background", "Blue")),
+                item("addr-2", "policy-a", "", 8, Map.of()),
+                item("addr-3", "policy-a", "", 12, Map.of()),
+                item("addr-3", "policy-b", "", 12, Map.of()),
+                item("addr-4", evmLower, "", 1500, Map.of()),
+                item("addr-5", "policy-b", "", 3, Map.of()));
+
+        // Users with differing wallet sets, including one with no wallets
+        Map<String, List<String>> users = Map.of(
+                "u-and-pass", List.of("addr-1", "addr-2"),
+                "u-and-fail", List.of("addr-1"),
+                "u-sum-over-max", List.of("addr-3"),
+                "u-evm", List.of("addr-4"),
+                "u-sum-pass", List.of("addr-2", "addr-5"),
+                "u-none", List.of());
+
+        RoleEvaluationService service = spy(new RoleEvaluationService());
+        // Simulate the DB query of findInventoryForPolicy: exact equality on raw or normalized policy id
+        doAnswer(inv -> {
+            List<String> addrs = inv.getArgument(0);
+            String raw = inv.getArgument(1);
+            String norm = inv.getArgument(2);
+            return all.stream()
+                    .filter(i -> addrs.contains(i.id.stakeAddress))
+                    .filter(i -> i.id.policyId.equals(raw) || i.id.policyId.equals(norm))
+                    .toList();
+        }).when(service).findInventoryForPolicy(any(), any(), any());
+        doAnswer(inv -> rulesByRole.get((String) inv.getArgument(1))).when(service).getRulesForRole(eq("guild-1"), any());
+
+        int eligibleCount = 0;
+        for (Map.Entry<String, List<String>> user : users.entrySet()) {
+            List<UserAssetInventory> userInventory = all.stream()
+                    .filter(i -> user.getValue().contains(i.id.stakeAddress))
+                    .toList();
+            for (String roleId : rulesByRole.keySet()) {
+                boolean dbBacked = service.evaluateRoleEligibility(user.getKey(), user.getValue(), "guild-1", roleId);
+                boolean inMemory = service.evaluateRules(user.getKey(), rulesByRole.get(roleId),
+                        r -> service.matchingQuantityInMemory(userInventory, r));
+                assertEquals(dbBacked, inMemory, "Mismatch for " + user.getKey() + " / " + roleId);
+                if (inMemory) eligibleCount++;
+            }
+        }
+        // Sanity: the fixture exercises both outcomes (u-and-pass, u-evm, u-sum-pass are eligible)
+        assertEquals(3, eligibleCount);
+    }
+
+    @Test
+    void testOutboxDecision() {
+        RoleEvaluationService service = new RoleEvaluationService();
+        dk.panos.promofacie.db.RoleSyncOutbox pendingPresent = new dk.panos.promofacie.db.RoleSyncOutbox();
+        pendingPresent.status = "PENDING";
+        pendingPresent.targetState = dk.panos.promofacie.db.TargetState.PRESENT;
+
+        // Already in sync, nothing queued -> skip
+        assertFalse(service.isOutboxTaskNeeded(false, dk.panos.promofacie.db.TargetState.ABSENT, null));
+        assertFalse(service.isOutboxTaskNeeded(true, dk.panos.promofacie.db.TargetState.PRESENT, null));
+        // Out of sync -> write
+        assertTrue(service.isOutboxTaskNeeded(true, dk.panos.promofacie.db.TargetState.ABSENT, null));
+        // Stale pending PRESENT for a member who no longer qualifies (and doesn't hold the role) -> overwrite
+        assertTrue(service.isOutboxTaskNeeded(false, dk.panos.promofacie.db.TargetState.ABSENT, pendingPresent));
+        // Pending task already targets the same state -> skip
+        assertFalse(service.isOutboxTaskNeeded(false, dk.panos.promofacie.db.TargetState.PRESENT, pendingPresent));
+    }
 }

@@ -21,6 +21,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.ToLongFunction;
 import java.util.stream.Collectors;
 import dk.panos.promofacie.controller.model.RuleRequest;
 
@@ -94,38 +95,42 @@ public class RoleEvaluationService {
             return false;
         }
 
-        // Group rules by their ruleGroup ID (e.g. Group 1, Group 2)
+        boolean eligible = evaluateRules(discordId, rules, rule -> getRuleMatchingQuantity(discordId, walletAddresses, rule));
+        log.info("[RoleEvaluation] Role eligibility for user {} in guild {} role {}: eligible={} ({} rule(s), {} wallet(s))",
+                discordId, guildId, roleId, eligible, rules.size(), walletAddresses != null ? walletAddresses.size() : 0);
+        return eligible;
+    }
+
+    /**
+     * Pure evaluation of one role's rules. Rules are grouped by ruleGroup; groups are OR'ed.
+     * An AND group requires every rule to be compliant; a SUM group requires the summed quantity
+     * to meet the summed min (and max, if any). Matching quantities come from {@code quantityFn},
+     * so the same logic serves both the DB-backed per-user path and the in-memory bulk path.
+     */
+    public boolean evaluateRules(String discordId, List<GuildRoleRule> rules, ToLongFunction<GuildRoleRule> quantityFn) {
         Map<Integer, List<GuildRoleRule>> groupedRules = rules.stream()
                 .collect(Collectors.groupingBy(r -> r.ruleGroup));
-
-        log.info("[RoleEvaluation] Evaluating role eligibility for user {} in guild {} for role {}. Found {} rule group(s).",
-                discordId, guildId, roleId, groupedRules.size());
 
         // Outer level is OR: at least one group must be satisfied
         for (Map.Entry<Integer, List<GuildRoleRule>> entry : groupedRules.entrySet()) {
             int groupId = entry.getKey();
             List<GuildRoleRule> group = entry.getValue();
 
-            log.info("[RoleEvaluation]   Evaluating rule group {} containing {} rule(s)", groupId, group.size());
-
             boolean isAndGroup = group.stream().anyMatch(r -> Boolean.TRUE.equals(r.isAnd));
 
             if (isAndGroup) {
                 boolean groupSatisfied = true;
                 for (GuildRoleRule rule : group) {
-                    long ruleQty = getRuleMatchingQuantity(discordId, walletAddresses, rule);
+                    long ruleQty = quantityFn.applyAsLong(rule);
                     boolean ruleCompliant = isQuantityCompliant(ruleQty, rule.minQuantity, rule.maxQuantity);
-                    log.info("[RoleEvaluation]     (AND Group) Rule id={} policy={} matchingQty={} (min={}, max={}) -> ruleCompliant={}",
-                            rule.id, rule.policyId, ruleQty, rule.minQuantity, rule.maxQuantity, ruleCompliant);
+                    log.debug("[RoleEvaluation]     (AND Group {}) user={} rule id={} policy={} matchingQty={} (min={}, max={}) -> ruleCompliant={}",
+                            groupId, discordId, rule.id, rule.policyId, ruleQty, rule.minQuantity, rule.maxQuantity, ruleCompliant);
                     if (!ruleCompliant) {
                         groupSatisfied = false;
                     }
                 }
                 if (groupSatisfied) {
-                    log.info("[RoleEvaluation]   Rule group {} (AND) satisfied!", groupId);
                     return true; // Satisfied one of the OR pathways
-                } else {
-                    log.info("[RoleEvaluation]   Rule group {} (AND) NOT satisfied!", groupId);
                 }
             } else {
                 long groupTotalQty = 0;
@@ -133,29 +138,21 @@ public class RoleEvaluationService {
                 Long groupMaxQty = null;
 
                 for (GuildRoleRule rule : group) {
-                    long ruleQty = getRuleMatchingQuantity(discordId, walletAddresses, rule);
+                    long ruleQty = quantityFn.applyAsLong(rule);
                     groupTotalQty += ruleQty;
                     groupRequiredQty += (rule.minQuantity != null ? rule.minQuantity : 1L);
                     if (rule.maxQuantity != null) {
                         groupMaxQty = (groupMaxQty == null) ? rule.maxQuantity : (groupMaxQty + rule.maxQuantity);
                     }
-                    log.info("[RoleEvaluation]     (SUM Group) Rule id={} policy={} matchingQty={} -> groupTotalQty={}, groupRequiredQty={}, groupMaxQty={}",
-                            rule.id, rule.policyId, ruleQty, groupTotalQty, groupRequiredQty, groupMaxQty);
+                    log.debug("[RoleEvaluation]     (SUM Group {}) user={} rule id={} policy={} matchingQty={} -> groupTotalQty={}, groupRequiredQty={}, groupMaxQty={}",
+                            groupId, discordId, rule.id, rule.policyId, ruleQty, groupTotalQty, groupRequiredQty, groupMaxQty);
                 }
 
                 if (isQuantityCompliant(groupTotalQty, groupRequiredQty, groupMaxQty)) {
-                    log.info("[RoleEvaluation]   Rule group {} (SUM) satisfied! Total matching quantity {} meets required min {} / max {}",
-                            groupId, groupTotalQty, groupRequiredQty, groupMaxQty);
                     return true; // Satisfied one of the OR pathways
-                } else {
-                    log.info("[RoleEvaluation]   Rule group {} (SUM) NOT satisfied! Total matching quantity {} does not meet required min {} / max {}",
-                            groupId, groupTotalQty, groupRequiredQty, groupMaxQty);
                 }
             }
         }
-
-        log.info("[RoleEvaluation]   No rule groups satisfied for user {} in guild {} for role {}.",
-                discordId, guildId, roleId);
         return false; // None of the groups were satisfied
     }
 
@@ -166,7 +163,16 @@ public class RoleEvaluationService {
                     discordId, guildId, roleId, targetState, eventSlot);
             return;
         }
+        upsertOutboxRow(discordId, guildId, roleId, targetState, eventSlot);
+    }
 
+    /**
+     * Writes the desired state without the "is it needed" check. Callers must have decided via
+     * {@link #isOutboxTaskNeeded(Boolean, TargetState, RoleSyncOutbox)}. The row is only overwritten
+     * when {@code eventSlot} is at least the stored one, so newer evaluations always win.
+     */
+    @Transactional
+    public void upsertOutboxRow(String discordId, String guildId, String roleId, TargetState targetState, long eventSlot) {
         RoleSyncOutbox.getEntityManager().createNativeQuery(
                         "INSERT INTO role_sync_outbox (discord_id, guild_id, role_id, target_state, status, event_slot, retry_count, created_at, updated_at) " +
                                 "VALUES (:discordId, :guildId, :roleId, :targetState, 'PENDING', :eventSlot, 0, now(), now()) " +
@@ -211,18 +217,21 @@ public class RoleEvaluationService {
             }
         }
         
+        RoleSyncOutbox existing = RoleSyncOutbox.find("discordId = ?1 and guildId = ?2 and roleId = ?3", discordId, guildId, roleId).firstResult();
+        return isOutboxTaskNeeded(hasRole, targetState, existing);
+    }
+
+    /**
+     * Pure decision: does the desired state need to be written to the outbox?
+     *
+     * @param hasRole  whether the member currently holds the role per the gateway cache, or null if unknown
+     * @param existing the current outbox row for (user, guild, role), or null
+     */
+    public boolean isOutboxTaskNeeded(Boolean hasRole, TargetState targetState, RoleSyncOutbox existing) {
         boolean discordStateMatches = false;
         if (hasRole != null) {
             discordStateMatches = (targetState == TargetState.PRESENT && hasRole) ||
                                    (targetState == TargetState.ABSENT && !hasRole);
-        }
-        
-        RoleSyncOutbox existing = RoleSyncOutbox.find("discordId = ?1 and guildId = ?2 and roleId = ?3", discordId, guildId, roleId).firstResult();
-        
-        if ("892629798772432906".equals(discordId)) {
-            log.info("[RoleEvaluation] DEBUG USER 892629798772432906: targetState={}, hasRole={}, discordStateMatches={}, existing={}",
-                    targetState, hasRole, discordStateMatches,
-                    existing != null ? ("id=" + existing.id + ", status=" + existing.status + ", targetState=" + existing.targetState + ", slot=" + existing.eventSlot) : "null");
         }
 
         if (existing == null) {
@@ -254,21 +263,42 @@ public class RoleEvaluationService {
 
     public long getRuleMatchingQuantity(String discordId, List<String> walletAddresses, GuildRoleRule rule) {
         if (walletAddresses == null || walletAddresses.isEmpty()) {
-            log.info("[RoleEvaluation]   User {} has no linked wallets - matching quantity = 0", discordId);
+            log.debug("[RoleEvaluation]   User {} has no linked wallets - matching quantity = 0", discordId);
             return 0;
         }
 
         String normalizedPolicyId = RuleRequest.normalizePolicyId(rule.policyId);
         List<UserAssetInventory> inventoryItems = findInventoryForPolicy(walletAddresses, rule.policyId, normalizedPolicyId);
 
-        log.info("[RoleEvaluation]   User {} has {} inventory items matching policyId {}",
+        log.debug("[RoleEvaluation]   User {} has {} inventory items matching policyId {}",
                 discordId, inventoryItems.size(), rule.policyId);
 
+        return sumSatisfyingQuantity(inventoryItems, rule);
+    }
+
+    /**
+     * In-memory equivalent of {@link #getRuleMatchingQuantity}: {@code userInventory} is all inventory
+     * rows of the user's wallets (any policy). Policy matching mirrors {@link #findInventoryForPolicy}:
+     * exact equality against the rule's raw policy id or its normalized form.
+     */
+    public long matchingQuantityInMemory(List<UserAssetInventory> userInventory, GuildRoleRule rule) {
+        if (userInventory == null || userInventory.isEmpty()) {
+            return 0;
+        }
+        String normalizedPolicyId = RuleRequest.normalizePolicyId(rule.policyId);
+        List<UserAssetInventory> matching = userInventory.stream()
+                .filter(item -> item.id.policyId != null
+                        && (item.id.policyId.equals(rule.policyId) || item.id.policyId.equals(normalizedPolicyId)))
+                .toList();
+        return sumSatisfyingQuantity(matching, rule);
+    }
+
+    private long sumSatisfyingQuantity(List<UserAssetInventory> items, GuildRoleRule rule) {
         long matchingQuantity = 0;
-        for (UserAssetInventory item : inventoryItems) {
+        for (UserAssetInventory item : items) {
             if (satisfiesCriteria(item, rule)) {
                 matchingQuantity += item.quantity;
-                log.info("[RoleEvaluation]     Item policy={}, asset={}, qty={} PASSED criteria. Current total={}",
+                log.debug("[RoleEvaluation]     Item policy={}, asset={}, qty={} PASSED criteria. Current total={}",
                         item.id.policyId, item.id.assetNameHex, item.quantity, matchingQuantity);
             }
         }
@@ -280,7 +310,7 @@ public class RoleEvaluationService {
             for (RuleTraitCriteria criterion : rule.criteria) {
                 String traitValue = item.traits != null ? item.traits.get(criterion.traitKey) : null;
                 if (traitValue == null || !traitValue.equalsIgnoreCase(criterion.traitValue)) {
-                    log.info("[RoleEvaluation]     Item policy={}, asset={}, qty={} FAILED trait criteria: expected {}={}, found {}",
+                    log.debug("[RoleEvaluation]     Item policy={}, asset={}, qty={} FAILED trait criteria: expected {}={}, found {}",
                             item.id.policyId, item.id.assetNameHex, item.quantity, criterion.traitKey, criterion.traitValue, traitValue);
                     return false;
                 }

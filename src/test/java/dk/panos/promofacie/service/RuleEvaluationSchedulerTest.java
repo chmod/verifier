@@ -1,142 +1,133 @@
 package dk.panos.promofacie.service;
 
-import dk.panos.promofacie.db.PendingRuleEvaluation;
 import dk.panos.promofacie.db.GuildRoleRule;
-import dk.panos.promofacie.db.Wallet;
+import dk.panos.promofacie.db.PendingRuleEvaluation;
+import dk.panos.promofacie.db.PendingUserEvaluation;
+import dk.panos.promofacie.db.RoleSyncOutbox;
 import dk.panos.promofacie.db.TargetState;
+import dk.panos.promofacie.db.UserAssetInventory;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
-import net.dv8tion.jda.api.utils.concurrent.Task;
+import net.dv8tion.jda.api.entities.Role;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class RuleEvaluationSchedulerTest {
 
-    @Test
-    @SuppressWarnings("unchecked")
-    void testRuleEvaluationSchedulerFlows() throws Exception {
-        RuleEvaluationScheduler scheduler = Mockito.spy(new RuleEvaluationScheduler());
-        JDA jda = mock(JDA.class);
-        scheduler.jda = jda;
+    private static Member member(String id, Role... roles) {
+        Member m = mock(Member.class);
+        when(m.getId()).thenReturn(id);
+        when(m.getRoles()).thenReturn(List.of(roles));
+        return m;
+    }
 
-        RoleEvaluationService roleEvaluationService = mock(RoleEvaluationService.class);
-        scheduler.roleEvaluationService = roleEvaluationService;
+    private static PendingRuleEvaluation task(long id, long ruleId) {
+        PendingRuleEvaluation t = new PendingRuleEvaluation();
+        t.id = id;
+        t.guildId = "guild-1";
+        t.ruleId = ruleId;
+        t.status = "PENDING";
+        return t;
+    }
 
-        // Tasks setup
-        PendingRuleEvaluation task1 = new PendingRuleEvaluation();
-        task1.id = 100L;
-        task1.guildId = "guild-1";
-        task1.ruleId = 1L;
-        task1.status = "PENDING";
-        
-        doReturn(List.of(task1)).when(scheduler).acquirePendingEvaluations();
-        doReturn(List.of()).when(scheduler).acquirePendingUserEvaluations();
-
-        Guild guild = mock(Guild.class);
-        when(jda.getGuildById("guild-1")).thenReturn(guild);
-        when(guild.isLoaded()).thenReturn(true);
-
-        Member member1 = mock(Member.class);
-        when(member1.getId()).thenReturn("user-1");
-        Member member2 = mock(Member.class);
-        when(member2.getId()).thenReturn("user-2");
-
-        when(guild.getMembers()).thenReturn(List.of(member1, member2));
-
+    private static GuildRoleRule goldRule() {
         GuildRoleRule rule = new GuildRoleRule();
         rule.id = 1L;
         rule.guildId = "guild-1";
         rule.roleId = "role-gold";
         rule.policyId = "policy-1";
         rule.minQuantity = 10L;
-
-        doReturn(rule).when(scheduler).getRuleById(1L);
-
-        // Wallets
-        Wallet w1 = new Wallet();
-        w1.setAddress("address-1");
-        w1.setDiscordId("user-1");
-
-        // user-1 has wallet, user-2 has no wallet
-        doReturn(List.of(w1)).when(scheduler).getWalletsByDiscordId("user-1");
-        doReturn(List.of()).when(scheduler).getWalletsByDiscordId("user-2");
-
-        // Inventory slot for user-1
-        doReturn(500L).when(scheduler).getMaxInventorySlot(List.of("address-1"));
-
-        // Compliance evaluation mock
-        when(roleEvaluationService.evaluateRoleEligibility("user-1", List.of("address-1"), "guild-1", "role-gold")).thenReturn(true);
-        when(roleEvaluationService.evaluateRoleEligibility("user-2", List.of(), "guild-1", "role-gold")).thenReturn(false);
-
-        doNothing().when(scheduler).markTasksDone(any());
-
-        // Act
-        scheduler.processPendingEvaluations();
-
-        // Assert
-        verify(roleEvaluationService, times(1)).upsertOutboxTask(eq("user-1"), eq("guild-1"), eq("role-gold"), eq(TargetState.PRESENT), anyLong());
-        verify(roleEvaluationService, times(1)).upsertOutboxTask(eq("user-2"), eq("guild-1"), eq("role-gold"), eq(TargetState.ABSENT), anyLong());
-        verify(scheduler, times(1)).markTasksDone(argThat(list -> list.size() == 1 && list.get(0).id == 100L));
+        return rule;
     }
 
+    /** Scheduler wired with a real RoleEvaluationService (DB write stubbed) and a single-guild setup. */
+    private record Fixture(RuleEvaluationScheduler scheduler, RoleEvaluationService service) {}
 
-    @Test
-    @SuppressWarnings("unchecked")
-    void testPartialFailureIsRetryable() throws Exception {
+    private static Fixture fixture(List<Member> members, Map<String, RoleSyncOutbox> outbox) {
         RuleEvaluationScheduler scheduler = Mockito.spy(new RuleEvaluationScheduler());
         JDA jda = mock(JDA.class);
         scheduler.jda = jda;
-
-        RoleEvaluationService roleEvaluationService = mock(RoleEvaluationService.class);
-        scheduler.roleEvaluationService = roleEvaluationService;
-
-        PendingRuleEvaluation task1 = new PendingRuleEvaluation();
-        task1.id = 100L;
-        task1.guildId = "guild-1";
-        task1.ruleId = 1L;
-        task1.status = "PENDING";
-        
-        doReturn(List.of(task1)).when(scheduler).acquirePendingEvaluations();
-        doReturn(List.of()).when(scheduler).acquirePendingUserEvaluations();
+        RoleEvaluationService service = spy(new RoleEvaluationService());
+        scheduler.roleEvaluationService = service;
+        doNothing().when(service).upsertOutboxRow(any(), any(), any(), any(), anyLong());
 
         Guild guild = mock(Guild.class);
         when(jda.getGuildById("guild-1")).thenReturn(guild);
-        when(guild.isLoaded()).thenReturn(true);
+        when(guild.getMembers()).thenReturn(members);
 
-        Member member1 = mock(Member.class);
-        when(member1.getId()).thenReturn("user-1");
-        when(guild.getMembers()).thenReturn(List.of(member1));
-
-        GuildRoleRule rule = new GuildRoleRule();
-        rule.id = 1L;
-        rule.guildId = "guild-1";
-        rule.roleId = "role-gold";
-        rule.policyId = "policy-1";
-
+        GuildRoleRule rule = goldRule();
+        doReturn(List.of(task(100L, 1L))).when(scheduler).acquirePendingEvaluations();
         doReturn(rule).when(scheduler).getRuleById(1L);
-        doReturn(List.of()).when(scheduler).getWalletsByDiscordId("user-1");
+        doReturn(List.of(rule)).when(scheduler).loadRulesForRoles("guild-1", Set.of("role-gold"));
 
-        // Force runtime exception mid-processing during upsert to simulate DB error
-        doThrow(new RuntimeException("Simulated Database Error"))
-            .when(roleEvaluationService).upsertOutboxTask(any(), any(), any(), any(), anyLong());
+        UserAssetInventory holding = new UserAssetInventory();
+        holding.id = new UserAssetInventory.InventoryId("address-1", "policy-1", "");
+        holding.quantity = 15L;
+        holding.traits = Map.of();
+        doReturn(Map.of("user-1", List.of("address-1"))).when(scheduler).loadWalletAddressesByDiscordId();
+        doReturn(Map.of("address-1", List.of(holding))).when(scheduler).loadInventoryByAddress(Set.of("policy-1"));
+        doReturn(outbox).when(scheduler).loadOutboxByUserRole("guild-1", Set.of("role-gold"));
 
+        doNothing().when(scheduler).markTasksDone(any());
         doNothing().when(scheduler).handleTasksFailure(any(), any());
+        return new Fixture(scheduler, service);
+    }
 
-        // Act
-        scheduler.processPendingEvaluations();
+    @Test
+    void testBulkRuleEvaluationWritesOnlyNeededOutboxRows() {
+        Role gold = mock(Role.class);
+        when(gold.getId()).thenReturn("role-gold");
 
-        // Assert
-        verify(scheduler, times(1)).handleTasksFailure(
-            argThat(list -> list.size() == 1 && list.get(0).id == 100L), 
-            eq("Simulated Database Error")
+        RoleSyncOutbox stalePendingPresent = new RoleSyncOutbox();
+        stalePendingPresent.discordId = "user-4";
+        stalePendingPresent.roleId = "role-gold";
+        stalePendingPresent.status = "PENDING";
+        stalePendingPresent.targetState = TargetState.PRESENT;
+
+        Fixture f = fixture(List.of(
+                member("user-1"),        // wallet with 15 >= 10, lacks role      -> PRESENT
+                member("user-2", gold),  // no wallet, holds role                 -> ABSENT
+                member("user-3"),        // no wallet, no role, nothing queued    -> nothing
+                member("user-4")         // no wallet, no role, stale PENDING PRESENT -> ABSENT
+        ), Map.of("user-4|role-gold", stalePendingPresent));
+
+        f.scheduler().processPendingRuleEvaluations();
+
+        ArgumentCaptor<Long> versions = ArgumentCaptor.forClass(Long.class);
+        verify(f.service()).upsertOutboxRow(eq("user-1"), eq("guild-1"), eq("role-gold"), eq(TargetState.PRESENT), versions.capture());
+        verify(f.service()).upsertOutboxRow(eq("user-2"), eq("guild-1"), eq("role-gold"), eq(TargetState.ABSENT), versions.capture());
+        verify(f.service()).upsertOutboxRow(eq("user-4"), eq("guild-1"), eq("role-gold"), eq(TargetState.ABSENT), versions.capture());
+        verify(f.service(), never()).upsertOutboxRow(eq("user-3"), any(), any(), any(), anyLong());
+        // One evaluation version for the whole run
+        assertEquals(1, versions.getAllValues().stream().distinct().count());
+        // No per-member DB access in the bulk path
+        verify(f.service(), never()).getRuleMatchingQuantity(any(), any(), any());
+        verify(f.service(), never()).isOutboxTaskNeeded(any(String.class), any(), any(), any());
+        verify(f.scheduler(), times(1)).markTasksDone(argThat(list -> list.size() == 1 && list.get(0).id == 100L));
+    }
+
+    @Test
+    void testPartialFailureIsRetryable() {
+        Fixture f = fixture(List.of(member("user-1")), Map.of());
+        doThrow(new RuntimeException("Simulated Database Error"))
+                .when(f.service()).upsertOutboxRow(any(), any(), any(), any(), anyLong());
+
+        f.scheduler().processPendingRuleEvaluations();
+
+        verify(f.scheduler(), times(1)).handleTasksFailure(
+                argThat(list -> list.size() == 1 && list.get(0).id == 100L),
+                eq("Simulated Database Error")
         );
-        verify(scheduler, never()).markTasksDone(any());
+        verify(f.scheduler(), never()).markTasksDone(any());
     }
 
     @Test
@@ -147,20 +138,21 @@ class RuleEvaluationSchedulerTest {
         scheduler.roleEvaluationService = roleEvaluationService;
         scheduler.roleSyncScheduler = roleSyncScheduler;
 
-        dk.panos.promofacie.db.PendingUserEvaluation userTask = new dk.panos.promofacie.db.PendingUserEvaluation();
+        PendingUserEvaluation userTask = new PendingUserEvaluation();
         userTask.id = 200L;
         userTask.guildId = "guild-1";
         userTask.discordId = "user-123";
         userTask.status = "PROCESSING";
 
-        doReturn(List.of()).when(scheduler).acquirePendingEvaluations();
         doReturn(List.of(userTask)).when(scheduler).acquirePendingUserEvaluations();
         doNothing().when(scheduler).markUserTaskDone(any());
 
-        scheduler.processPendingEvaluations();
+        scheduler.processPendingUserEvaluations();
 
         verify(roleEvaluationService, times(1)).recalculateUserRolesInGuild("user-123", "guild-1");
         verify(roleSyncScheduler, times(1)).processUserGuildGroup("user-123", "guild-1");
         verify(scheduler, times(1)).markUserTaskDone(userTask);
+        // User evaluations no longer piggyback on the rule evaluation job
+        verify(scheduler, never()).acquirePendingEvaluations();
     }
 }
