@@ -33,10 +33,12 @@ public class WalletPersistenceService {
         log.info("Wallet persisted address={} discordId={} chain={}", address, discordId, wallet.getChain());
     }
 
+    @Transactional
     public List<Wallet> findByDiscordId(String discordId) {
         return Wallet.list("discordId", discordId);
     }
 
+    @Transactional
     public Wallet findByAddressAndDiscordId(String stakeAddress, String discordId) {
         return Wallet.find("discordId = ?1 and address = ?2", discordId, stakeAddress).firstResult();
     }
