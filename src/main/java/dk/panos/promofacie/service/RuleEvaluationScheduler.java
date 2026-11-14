@@ -121,9 +121,21 @@ public class RuleEvaluationScheduler {
                 for (String address : addresses) {
                     userInventory.addAll(inventoryByAddress.getOrDefault(address, List.of()));
                 }
-                if (!addresses.isEmpty()) {
-                    membersWithWallets++;
+                if (addresses.isEmpty()) {
+                    // Members who never linked a wallet are not ours to manage: their roles may come from
+                    // admins or another bot. Unlinking/reassigning re-evaluates the user on its own path,
+                    // so the bulk sync only cancels a not-yet-applied grant here.
+                    for (String roleId : roleIds) {
+                        RoleSyncOutbox existing = outboxByUserRole.get(discordId + "|" + roleId);
+                        if (existing != null && existing.targetState == TargetState.PRESENT
+                                && ("PENDING".equals(existing.status) || "PROCESSING".equals(existing.status))) {
+                            roleEvaluationService.upsertOutboxRow(discordId, guildId, roleId, TargetState.ABSENT, evaluationVersion);
+                            rowsWritten++;
+                        }
+                    }
+                    continue;
                 }
+                membersWithWallets++;
                 Set<String> heldRoleIds = member.getRoles().stream().map(Role::getId).collect(Collectors.toSet());
 
                 for (String roleId : roleIds) {

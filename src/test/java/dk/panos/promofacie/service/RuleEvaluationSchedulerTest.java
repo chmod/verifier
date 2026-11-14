@@ -95,17 +95,17 @@ class RuleEvaluationSchedulerTest {
 
         Fixture f = fixture(List.of(
                 member("user-1"),        // wallet with 15 >= 10, lacks role      -> PRESENT
-                member("user-2", gold),  // no wallet, holds role                 -> ABSENT
+                member("user-2", gold),  // no wallet, holds role (admin/other bot) -> left alone
                 member("user-3"),        // no wallet, no role, nothing queued    -> nothing
-                member("user-4")         // no wallet, no role, stale PENDING PRESENT -> ABSENT
+                member("user-4")         // no wallet, no role, stale PENDING PRESENT -> cancelled (ABSENT)
         ), Map.of("user-4|role-gold", stalePendingPresent));
 
         f.scheduler().processPendingRuleEvaluations();
 
         ArgumentCaptor<Long> versions = ArgumentCaptor.forClass(Long.class);
         verify(f.service()).upsertOutboxRow(eq("user-1"), eq("guild-1"), eq("role-gold"), eq(TargetState.PRESENT), versions.capture());
-        verify(f.service()).upsertOutboxRow(eq("user-2"), eq("guild-1"), eq("role-gold"), eq(TargetState.ABSENT), versions.capture());
         verify(f.service()).upsertOutboxRow(eq("user-4"), eq("guild-1"), eq("role-gold"), eq(TargetState.ABSENT), versions.capture());
+        verify(f.service(), never()).upsertOutboxRow(eq("user-2"), any(), any(), any(), anyLong());
         verify(f.service(), never()).upsertOutboxRow(eq("user-3"), any(), any(), any(), anyLong());
         // One evaluation version for the whole run
         assertEquals(1, versions.getAllValues().stream().distinct().count());

@@ -17,20 +17,24 @@ public class WalletPersistenceService {
         persist(stakeAddress, discordId, Chain.CARDANO);
     }
 
+    /** @return the previous owner's discordId if the wallet was reassigned from another user, else null */
     @Transactional
-    public void persist(String address, String discordId, Chain chain) {
+    public String persist(String address, String discordId, Chain chain) {
         Wallet wallet = Wallet.find("address = ?1", address).firstResult();
+        String previousOwner = null;
         if (wallet == null) {
             wallet = new Wallet();
             wallet.setAddress(address);
         } else if (!discordId.equals(wallet.getDiscordId())) {
+            previousOwner = wallet.getDiscordId();
             log.warn("Reassigning wallet address={} from previous discordId={} to new discordId={}",
-                    address, wallet.getDiscordId(), discordId);
+                    address, previousOwner, discordId);
         }
         wallet.setDiscordId(discordId);
         wallet.setChain(chain != null ? chain : Chain.CARDANO);
         wallet.persist();
         log.info("Wallet persisted address={} discordId={} chain={}", address, discordId, wallet.getChain());
+        return previousOwner;
     }
 
     @Transactional

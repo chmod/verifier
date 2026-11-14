@@ -138,11 +138,16 @@ public class WalletVerificationResource {
                 resolvedAddress, discordId, targetChain);
 
         // 1. Synchronously persist or reassign in database
-        walletPersistenceService.persist(resolvedAddress, discordId, targetChain);
+        String previousOwner = walletPersistenceService.persist(resolvedAddress, discordId, targetChain);
 
-        // Enqueue role recalculation for user across all configured guilds
+        // Enqueue role recalculation for user across all configured guilds. A previous owner lost
+        // this wallet's holdings and must be re-evaluated too: the bulk guild sync skips members
+        // left without wallets.
         if (roleEvaluationService != null) {
             roleEvaluationService.enqueueUserEvaluationForAllGuilds(discordId);
+            if (previousOwner != null) {
+                roleEvaluationService.enqueueUserEvaluationForAllGuilds(previousOwner);
+            }
         }
 
         // 2. Broadcast tracking command to Kafka
