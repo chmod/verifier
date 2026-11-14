@@ -194,11 +194,15 @@ public class RuleEvaluationScheduler {
                 guildId, roleIds);
     }
 
-    /** discordId -> wallet addresses, for all linked wallets. Avoids an IN list over (possibly huge) member ids. */
+    /**
+     * discordId -> distinct wallet addresses, for all linked wallets. Avoids an IN list over (possibly huge)
+     * member ids. Distinct matters: the caller sums inventory per address, so a duplicated wallet row would
+     * multiply the user's holdings.
+     */
     @Transactional
     public Map<String, List<String>> loadWalletAddressesByDiscordId() {
         List<Object[]> rows = Wallet.getEntityManager()
-                .createQuery("select w.discordId, w.address from Wallet w", Object[].class)
+                .createQuery("select distinct w.discordId, w.address from Wallet w", Object[].class)
                 .getResultList();
         Map<String, List<String>> result = new HashMap<>();
         for (Object[] row : rows) {

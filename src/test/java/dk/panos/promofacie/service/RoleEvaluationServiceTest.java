@@ -199,6 +199,40 @@ class RoleEvaluationServiceTest {
     }
 
     @Test
+    void testSatisfiesCriteriaSameKeyIsOr() {
+        RoleEvaluationService service = new RoleEvaluationService();
+
+        GuildRoleRule rule = new GuildRoleRule();
+        rule.policyId = "policy-abc";
+        for (String tier : List.of("Silver", "Gold", "Platinum")) {
+            RuleTraitCriteria c = new RuleTraitCriteria();
+            c.traitKey = "Tier";
+            c.traitValue = tier;
+            rule.addCriteria(c);
+        }
+        RuleTraitCriteria type = new RuleTraitCriteria();
+        type.traitKey = "Type";
+        type.traitValue = "Robot";
+        rule.addCriteria(type);
+
+        UserAssetInventory gold = new UserAssetInventory();
+        gold.id = new UserAssetInventory.InventoryId("addr-1", "policy-abc", "asset-1");
+        gold.traits = Map.of("Tier", "Gold", "Type", "Robot");
+        assertTrue(service.satisfiesCriteria(gold, rule));
+
+        // Different keys still AND: right tier, wrong type
+        UserAssetInventory goldHuman = new UserAssetInventory();
+        goldHuman.id = new UserAssetInventory.InventoryId("addr-1", "policy-abc", "asset-2");
+        goldHuman.traits = Map.of("Tier", "Gold", "Type", "Human");
+        assertFalse(service.satisfiesCriteria(goldHuman, rule));
+
+        UserAssetInventory bronze = new UserAssetInventory();
+        bronze.id = new UserAssetInventory.InventoryId("addr-1", "policy-abc", "asset-3");
+        bronze.traits = Map.of("Tier", "Bronze", "Type", "Robot");
+        assertFalse(service.satisfiesCriteria(bronze, rule));
+    }
+
+    @Test
     void testEvaluateRoleEligibilityTieredRoles() {
         RoleEvaluationService service = spy(new RoleEvaluationService());
 

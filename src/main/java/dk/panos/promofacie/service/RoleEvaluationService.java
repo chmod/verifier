@@ -56,7 +56,7 @@ public class RoleEvaluationService {
                 discordId, eventSlot, changedPolicies);
 
         List<Wallet> userWallets = Wallet.list("discordId = ?1", discordId);
-        List<String> walletAddresses = userWallets.stream().map(Wallet::getAddress).toList();
+        List<String> walletAddresses = userWallets.stream().map(Wallet::getAddress).distinct().toList();
 
         Set<String> searchPolicies = new HashSet<>(changedPolicies);
         for (String p : changedPolicies) {
@@ -305,15 +305,26 @@ public class RoleEvaluationService {
         return matchingQuantity;
     }
 
+    /**
+     * Criteria sharing a trait key are OR'ed (Tier=Silver, Tier=Gold → either tier); different keys are
+     * AND'ed (Tier=Gold, Fur=Red → both). AND within one key could never match, since an item has one
+     * value per trait.
+     */
     public boolean satisfiesCriteria(UserAssetInventory item, GuildRoleRule rule) {
-        if (rule.criteria != null && !rule.criteria.isEmpty()) {
-            for (RuleTraitCriteria criterion : rule.criteria) {
-                String traitValue = item.traits != null ? item.traits.get(criterion.traitKey) : null;
-                if (traitValue == null || !traitValue.equalsIgnoreCase(criterion.traitValue)) {
-                    log.debug("[RoleEvaluation]     Item policy={}, asset={}, qty={} FAILED trait criteria: expected {}={}, found {}",
-                            item.id.policyId, item.id.assetNameHex, item.quantity, criterion.traitKey, criterion.traitValue, traitValue);
-                    return false;
-                }
+        if (rule.criteria == null || rule.criteria.isEmpty()) {
+            return true;
+        }
+        Map<String, List<RuleTraitCriteria>> byKey = rule.criteria.stream()
+                .collect(Collectors.groupingBy(c -> c.traitKey));
+        for (Map.Entry<String, List<RuleTraitCriteria>> entry : byKey.entrySet()) {
+            String traitValue = item.traits != null ? item.traits.get(entry.getKey()) : null;
+            boolean anyMatch = traitValue != null
+                    && entry.getValue().stream().anyMatch(c -> traitValue.equalsIgnoreCase(c.traitValue));
+            if (!anyMatch) {
+                log.debug("[RoleEvaluation]     Item policy={}, asset={}, qty={} FAILED trait criteria: expected {} in {}, found {}",
+                        item.id.policyId, item.id.assetNameHex, item.quantity, entry.getKey(),
+                        entry.getValue().stream().map(c -> c.traitValue).toList(), traitValue);
+                return false;
             }
         }
         return true;
@@ -344,7 +355,7 @@ public class RoleEvaluationService {
     public void recalculateUserRolesInGuild(String discordId, String guildId) {
         List<GuildRoleRule> rules = GuildRoleRule.list("guildId", guildId);
         List<Wallet> wallets = Wallet.list("discordId = ?1", discordId);
-        List<String> walletAddresses = wallets.stream().map(Wallet::getAddress).toList();
+        List<String> walletAddresses = wallets.stream().map(Wallet::getAddress).distinct().toList();
 
         if (rules.isEmpty()) {
             log.info("[RoleEvaluation] No rules configured for guild {}", guildId);
