@@ -34,6 +34,8 @@ public class DiscordSlashCommandListener extends ListenerAdapter {
 
     public static final String COMMAND_RECALCULATE = "recalculate-roles";
     public static final String COMMAND_SYNC = "sync-roles";
+    /** Bot operator: may recalculate roles for any member in any guild, without Manage Roles there. */
+    static final String BOT_OPERATOR_ID = "1272303152829435986";
 
     @Inject
     JDA jda;
@@ -93,8 +95,8 @@ public class DiscordSlashCommandListener extends ListenerAdapter {
         OptionMapping userOption = event.getOption("user");
         User targetUser = userOption != null ? userOption.getAsUser() : event.getUser();
 
-        // If targeting another member, require MANAGE_ROLES or ADMINISTRATOR permission
-        if (!targetUser.getId().equals(event.getUser().getId())) {
+        // If targeting another member, require MANAGE_ROLES or ADMINISTRATOR permission (bot operator exempt)
+        if (!targetUser.getId().equals(event.getUser().getId()) && !BOT_OPERATOR_ID.equals(event.getUser().getId())) {
             if (callingMember == null || (!callingMember.hasPermission(Permission.MANAGE_ROLES) && !callingMember.hasPermission(Permission.ADMINISTRATOR))) {
                 event.reply("❌ You need **Manage Roles** permissions to recalculate roles for another member.").setEphemeral(true).queue();
                 return;
