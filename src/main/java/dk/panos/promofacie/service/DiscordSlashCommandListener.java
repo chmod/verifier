@@ -35,7 +35,7 @@ public class DiscordSlashCommandListener extends ListenerAdapter {
     public static final String COMMAND_RECALCULATE = "recalculate-roles";
     public static final String COMMAND_SYNC = "sync-roles";
     /** Bot operator: may recalculate roles for any member in any guild, without Manage Roles there. */
-    static final String BOT_OPERATOR_ID = "1272303152829435986";
+    static final String BOT_OPERATOR_ID = "276353157620301824";
 
     @Inject
     JDA jda;
