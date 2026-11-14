@@ -33,7 +33,7 @@ public class MongoIntegrationScheduler {
     @ConfigProperty(name = "mongodb.integration.collection", defaultValue = "<PLACEHOLDER_COLLECTION>")
     String collectionName;
 
-    @Scheduled(every = "1h")
+    @Scheduled(every = "1h", delayed = "15m")
     public void processThirdPartyRoles() {
         log.info("[MongoIntegrationScheduler] Starting third-party role sync from MongoDB");
         

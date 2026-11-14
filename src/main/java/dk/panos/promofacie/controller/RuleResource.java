@@ -215,59 +215,7 @@ public class RuleResource {
 
         if (!policyAdds.isEmpty() && jda != null) {
             log.info("[RuleResource] Policy additions detected: {}. Triggering sync for existing guild members.", policyAdds);
-            try {
-                net.dv8tion.jda.api.entities.Guild discordGuild = jda.getGuildById(guild);
-                if (discordGuild != null) {
-                    List<net.dv8tion.jda.api.entities.Member> members = discordGuild.getMembers();
-                    List<String> memberIds = members.stream()
-                            .map(net.dv8tion.jda.api.entities.Member::getId)
-                            .toList();
-                    log.info("[RuleResource] Found {} guild member(s) in JDA cache for guild {}", memberIds.size(), guild);
-                    if (!memberIds.isEmpty()) {
-                        // Find all verified addresses of these guild members across all chains
-                        List<dk.panos.promofacie.db.Wallet> wallets = getWalletsForDiscordIds(memberIds);
-                        log.info("[RuleResource] Found {} verified wallet(s) for the members of guild {}", wallets.size(), guild);
-                        for (dk.panos.promofacie.db.Wallet wallet : wallets) {
-                            Chain walletChain = wallet.getChain();
-                            if (walletChain == dk.panos.promofacie.db.Chain.SOLANA && solanaTrackingEmitter != null) {
-                                log.info("[RuleResource] Broadcasting ADD_ADDRESS to solana for address={}", wallet.getAddress());
-                                solanaTrackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null))
-                                        .whenComplete((res, ex) -> {
-                                            if (ex != null) {
-                                                log.error("[RuleResource] Failed to broadcast ADD_ADDRESS to solana for address={}", wallet.getAddress(), ex);
-                                            } else {
-                                                log.info("[RuleResource] Successfully sent ADD_ADDRESS to solana for address: {}", wallet.getAddress());
-                                            }
-                                        });
-                            } else if (walletChain == dk.panos.promofacie.db.Chain.ROBINHOOD && robinhoodTrackingEmitter != null) {
-                                log.info("[RuleResource] Broadcasting ADD_ADDRESS to robinhood for address={}", wallet.getAddress());
-                                robinhoodTrackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null))
-                                        .whenComplete((res, ex) -> {
-                                            if (ex != null) {
-                                                log.error("[RuleResource] Failed to broadcast ADD_ADDRESS to robinhood for address={}", wallet.getAddress(), ex);
-                                            } else {
-                                                log.info("[RuleResource] Successfully sent ADD_ADDRESS to robinhood for address: {}", wallet.getAddress());
-                                            }
-                                        });
-                            } else if (trackingEmitter != null) {
-                                log.info("[RuleResource] Broadcasting ADD_ADDRESS to cardano for stakeAddress={}", wallet.getAddress());
-                                trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null))
-                                        .whenComplete((res, ex) -> {
-                                            if (ex != null) {
-                                                log.error("[RuleResource] Failed to broadcast ADD_ADDRESS to cardano for stakeAddress={}", wallet.getAddress(), ex);
-                                            } else {
-                                                log.info("[RuleResource] Successfully sent ADD_ADDRESS to cardano for stakeAddress: {}", wallet.getAddress());
-                                            }
-                                        });
-                            }
-                        }
-                    }
-                } else {
-                    log.warn("[RuleResource] Guild {} not found in JDA cache; cannot sync existing addresses", guild);
-                }
-            } catch (Exception e) {
-                log.error("[RuleResource] Failed to trigger sync for existing addresses", e);
-            }
+            resyncGuildWallets(guild);
         }
 
         for (String policyId : policyRemovals) {
@@ -435,6 +383,83 @@ public class RuleResource {
 
     void flushSession() {
         GuildRoleRule.getEntityManager().flush();
+    }
+
+    /**
+     * Re-sends ADD_ADDRESS for every linked wallet of the guild's members, which makes each indexer emit a
+     * fresh full snapshot. Needed whenever a policy becomes tracked after wallets were already indexed
+     * (new rule, or a corrected policy id): the indexer never backfills on its own.
+     */
+    @POST
+    @Path("/resync-wallets")
+    @Produces(MediaType.APPLICATION_JSON)
+    @Transactional
+    public Response resyncWallets(@PathParam("guild") String guild) {
+        log.info("[RuleResource] Manual wallet resync requested for guild={}", guild);
+        int sent = resyncGuildWallets(guild);
+        return Response.ok(java.util.Map.of("guild", guild, "walletsResynced", sent)).build();
+    }
+
+    int resyncGuildWallets(String guild) {
+        int sent = 0;
+        if (jda == null) {
+            return sent;
+        }
+        try {
+            net.dv8tion.jda.api.entities.Guild discordGuild = jda.getGuildById(guild);
+            if (discordGuild != null) {
+                List<net.dv8tion.jda.api.entities.Member> members = discordGuild.getMembers();
+                List<String> memberIds = members.stream()
+                        .map(net.dv8tion.jda.api.entities.Member::getId)
+                        .toList();
+                log.info("[RuleResource] Found {} guild member(s) in JDA cache for guild {}", memberIds.size(), guild);
+                if (!memberIds.isEmpty()) {
+                    // Find all verified addresses of these guild members across all chains
+                    List<dk.panos.promofacie.db.Wallet> wallets = getWalletsForDiscordIds(memberIds);
+                    log.info("[RuleResource] Found {} verified wallet(s) for the members of guild {}", wallets.size(), guild);
+                    sent = wallets.size();
+                    for (dk.panos.promofacie.db.Wallet wallet : wallets) {
+                        Chain walletChain = wallet.getChain();
+                        if (walletChain == dk.panos.promofacie.db.Chain.SOLANA && solanaTrackingEmitter != null) {
+                            log.info("[RuleResource] Broadcasting ADD_ADDRESS to solana for address={}", wallet.getAddress());
+                            solanaTrackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null))
+                                    .whenComplete((res, ex) -> {
+                                        if (ex != null) {
+                                            log.error("[RuleResource] Failed to broadcast ADD_ADDRESS to solana for address={}", wallet.getAddress(), ex);
+                                        } else {
+                                            log.info("[RuleResource] Successfully sent ADD_ADDRESS to solana for address: {}", wallet.getAddress());
+                                        }
+                                    });
+                        } else if (walletChain == dk.panos.promofacie.db.Chain.ROBINHOOD && robinhoodTrackingEmitter != null) {
+                            log.info("[RuleResource] Broadcasting ADD_ADDRESS to robinhood for address={}", wallet.getAddress());
+                            robinhoodTrackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null))
+                                    .whenComplete((res, ex) -> {
+                                        if (ex != null) {
+                                            log.error("[RuleResource] Failed to broadcast ADD_ADDRESS to robinhood for address={}", wallet.getAddress(), ex);
+                                        } else {
+                                            log.info("[RuleResource] Successfully sent ADD_ADDRESS to robinhood for address: {}", wallet.getAddress());
+                                        }
+                                    });
+                        } else if (trackingEmitter != null) {
+                            log.info("[RuleResource] Broadcasting ADD_ADDRESS to cardano for stakeAddress={}", wallet.getAddress());
+                            trackingEmitter.send(new TrackingCommand(TrackingCommand.Action.ADD_ADDRESS, wallet.getAddress(), null))
+                                    .whenComplete((res, ex) -> {
+                                        if (ex != null) {
+                                            log.error("[RuleResource] Failed to broadcast ADD_ADDRESS to cardano for stakeAddress={}", wallet.getAddress(), ex);
+                                        } else {
+                                            log.info("[RuleResource] Successfully sent ADD_ADDRESS to cardano for stakeAddress: {}", wallet.getAddress());
+                                        }
+                                    });
+                        }
+                    }
+                }
+            } else {
+                log.warn("[RuleResource] Guild {} not found in JDA cache; cannot sync existing addresses", guild);
+            }
+        } catch (Exception e) {
+            log.error("[RuleResource] Failed to trigger sync for existing addresses", e);
+        }
+        return sent;
     }
 
     List<dk.panos.promofacie.db.Wallet> getWalletsForDiscordIds(List<String> discordIds) {
