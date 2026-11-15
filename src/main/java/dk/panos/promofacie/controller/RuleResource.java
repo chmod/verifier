@@ -56,6 +56,14 @@ public class RuleResource {
                     .build();
         }
 
+        Optional<String> duplicate = findDuplicateRule(rules);
+        if (duplicate.isPresent()) {
+            log.warn("[RuleResource] Rejected ruleset for guild={}: {}", guild, duplicate.get());
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(Map.of("error", duplicate.get()))
+                    .build();
+        }
+
         log.info("[RuleResource] Updating ruleset for guild={}", guild);
 
         // 1. Fetch existing rules for this guild eagerly with criteria
@@ -371,6 +379,55 @@ public class RuleResource {
 
     void deleteRule(GuildRoleRule rule) {
         rule.delete();
+    }
+
+    /**
+     * Two rules are duplicates when they have the same role, policy, group, quantities and trait criteria.
+     * Criteria compare in any order, with values case-insensitive (as evaluation matches them). Rules sent
+     * without a group share one "ungrouped" bucket, because each is given its own group number on save.
+     * Rules that differ only in their traits are distinct, which an AND group such as "one card of each
+     * tier" needs.
+     */
+    Optional<String> findDuplicateRule(List<RuleRequest> rules) {
+        if (rules == null) {
+            return Optional.empty();
+        }
+        Set<List<Object>> seen = new HashSet<>();
+        for (RuleRequest rule : rules) {
+            Set<String> criteria = new TreeSet<>();
+            if (rule.criteria() != null) {
+                for (CriteriaRequest c : rule.criteria()) {
+                    criteria.add(trim(c.traitKey()) + "=" + trim(c.traitValue()).toLowerCase(Locale.ROOT));
+                }
+            }
+            List<Object> key = Arrays.asList(
+                    rule.roleId(),
+                    trim(rule.policyId()),
+                    rule.group() != null ? rule.group() : "ungrouped",
+                    rule.minQuantity() != null ? rule.minQuantity() : 1L,
+                    rule.maxQuantity(),
+                    criteria);
+            if (!seen.add(key)) {
+                return Optional.of("Duplicate rule for role " + roleLabel(rule.roleId())
+                        + ": policy " + trim(rule.policyId())
+                        + (criteria.isEmpty() ? ", no traits" : ", traits " + String.join(", ", criteria))
+                        + " appears more than once" + (rule.group() != null ? " in the same group" : ""));
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static String trim(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    private String roleLabel(String roleId) {
+        try {
+            var role = jda != null && roleId != null ? jda.getRoleById(roleId) : null;
+            return role != null ? role.getName() + " (" + roleId + ")" : roleId;
+        } catch (RuntimeException e) {
+            return roleId;
+        }
     }
 
     void persistRule(GuildRoleRule rule) {

@@ -416,4 +416,81 @@ class RuleResourceTest {
         assertFalse(cardanoCommands.stream().anyMatch(c -> c.action() == TrackingCommand.Action.ADD_POLICY));
         assertFalse(cardanoCommands.stream().anyMatch(c -> c.action() == TrackingCommand.Action.REMOVE_POLICY));
     }
+
+    private static final String FOUNDERS = "996fc700944223de3a8e9da0c29b9c99bc4f36a78eb169a8d471c4a2";
+
+    @SuppressWarnings("unchecked")
+    private RuleResource resourceWithNoExistingRules() {
+        RuleResource resource = spy(new RuleResource());
+        Emitter<TrackingCommand> emitter = mock(Emitter.class);
+        resource.trackingEmitter = emitter;
+        lenient().when(emitter.send(any(TrackingCommand.class))).thenReturn(CompletableFuture.completedFuture(null));
+        lenient().doReturn(Collections.emptyList()).when(resource).getExistingRules("123456");
+        lenient().doReturn(1L).when(resource).countPolicyGlobally(anyString());
+        lenient().doNothing().when(resource).persistRule(any(GuildRoleRule.class));
+        lenient().doNothing().when(resource).persistPendingEvaluation(any(PendingRuleEvaluation.class));
+        lenient().doNothing().when(resource).flushSession();
+        return resource;
+    }
+
+    private static RuleRequest tierRule(Integer group, Boolean isAnd, CriteriaRequest... criteria) {
+        return new RuleRequest("champion", FOUNDERS, 1L, null, List.of(criteria), group, isAnd);
+    }
+
+    // "One card of each tier": three rules for the same role and policy in one AND group, differing only in trait.
+    @Test
+    void testUpdateRulesAcceptsAndGroupOfSamePolicyWithDifferentTraits() {
+        RuleResource resource = resourceWithNoExistingRules();
+
+        Response response = resource.updateRules("123456", List.of(
+                tierRule(7, true, new CriteriaRequest("Tier", "Platinum")),
+                tierRule(7, true, new CriteriaRequest("Tier", "Gold")),
+                tierRule(7, true, new CriteriaRequest("Tier", "Silver"))));
+
+        assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+        ArgumentCaptor<GuildRoleRule> captor = ArgumentCaptor.forClass(GuildRoleRule.class);
+        verify(resource, times(3)).persistRule(captor.capture());
+        assertTrue(captor.getAllValues().stream().allMatch(r -> r.ruleGroup == 7 && r.isAnd));
+    }
+
+    @Test
+    void testUpdateRulesRejectsDuplicateRuleInTheSameGroupBeforeTouchingTheRuleset() {
+        RuleResource resource = resourceWithNoExistingRules();
+
+        Response response = resource.updateRules("123456", List.of(
+                tierRule(7, true, new CriteriaRequest("Tier", "Gold"), new CriteriaRequest("Fur", "Red")),
+                tierRule(7, true, new CriteriaRequest("Fur", "red"), new CriteriaRequest("Tier", " GOLD "))));
+
+        assertEquals(Response.Status.BAD_REQUEST.getStatusCode(), response.getStatus());
+        String error = ((java.util.Map<String, String>) response.getEntity()).get("error");
+        assertTrue(error.startsWith("Duplicate rule for role champion"), error);
+        verify(resource, never()).getExistingRules(anyString());
+        verify(resource, never()).persistRule(any(GuildRoleRule.class));
+    }
+
+    // Ungrouped rules each get their own group on save, so the duplicate check treats them as one bucket.
+    @Test
+    void testUpdateRulesRejectsDuplicateUngroupedRules() {
+        RuleResource resource = resourceWithNoExistingRules();
+
+        Response response = resource.updateRules("123456", List.of(
+                tierRule(null, false, new CriteriaRequest("Tier", "Gold")),
+                tierRule(null, false, new CriteriaRequest("Tier", "Gold"))));
+
+        assertEquals(Response.Status.BAD_REQUEST.getStatusCode(), response.getStatus());
+        verify(resource, never()).persistRule(any(GuildRoleRule.class));
+    }
+
+    @Test
+    void testUpdateRulesAllowsTheSameRuleInDifferentGroupsOrWithDifferentQuantities() {
+        RuleResource resource = resourceWithNoExistingRules();
+
+        Response response = resource.updateRules("123456", List.of(
+                tierRule(1, true, new CriteriaRequest("Tier", "Gold")),
+                tierRule(2, true, new CriteriaRequest("Tier", "Gold")),
+                new RuleRequest("champion", FOUNDERS, 2L, null, List.of(new CriteriaRequest("Tier", "Gold")), 1, true)));
+
+        assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+        verify(resource, times(3)).persistRule(any(GuildRoleRule.class));
+    }
 }

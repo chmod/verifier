@@ -6,9 +6,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "guild_role_rules", uniqueConstraints = {
-        @UniqueConstraint(name = "uq_guild_role_policy_group", columnNames = {"guild_id", "role_id", "policy_id", "rule_group"})
-}, indexes = {
+// No unique constraint on (guild, role, policy, group): an AND group may hold several rules for the same policy that
+// differ only in trait criteria. RuleResource.findDuplicateRule rejects exact duplicates on save instead.
+@Table(name = "guild_role_rules", indexes = {
         @Index(name = "idx_rules_policy_search", columnList = "policy_id")
 })
 public class GuildRoleRule extends PanacheEntity {
