@@ -11,6 +11,7 @@ import dk.panos.promofacie.kafka.model.TrackingCommand;
 import dk.panos.promofacie.service.InMemoryNonceStore;
 import dk.panos.promofacie.service.RoleEvaluationService;
 import dk.panos.promofacie.service.opensea.OpenSeaAccount;
+import dk.panos.promofacie.service.opensea.OpenSeaCheckLimiter;
 import dk.panos.promofacie.service.opensea.OpenSeaClient;
 import dk.panos.promofacie.service.opensea.OpenSeaUnavailableException;
 import jakarta.ws.rs.core.Response;
@@ -74,6 +75,7 @@ class OpenSeaVerificationResourceTest {
     private Emitter<TrackingCommand> robinhoodEmitter;
     private Emitter<TrackingCommand> solanaEmitter;
     private MutableClock clock;
+    private OpenSeaCheckLimiter limiter;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -99,7 +101,9 @@ class OpenSeaVerificationResourceTest {
         resource.roleEvaluationService = roleEvaluation;
         resource.robinhoodTrackingEmitter = robinhoodEmitter;
         resource.solanaTrackingEmitter = solanaEmitter;
-        resource.clock = clock;
+        limiter = new OpenSeaCheckLimiter();
+        limiter.clock = clock;
+        resource.checkLimiter = limiter;
     }
 
     private Map<?, ?> challenge(String address) {
@@ -358,6 +362,58 @@ class OpenSeaVerificationResourceTest {
         clock.advance(Duration.ofSeconds(10));
         assertEquals(400, checkBio(body).getStatus());
         assertEquals(2, openSea.calls.get());
+    }
+
+    @Test
+    void perUserHourlyCapReturns429AndKeepsTheChallenge() {
+        limiter.maxChecksPerUserPerHour = 2;
+        Map<?, ?> body = challenge(ADDRESS);
+        profileWithBio(ADDRESS, "not yet");
+
+        assertEquals(400, checkBio(body).getStatus());
+        clock.advance(Duration.ofSeconds(11));
+        assertEquals(400, checkBio(body).getStatus());
+        clock.advance(Duration.ofSeconds(11));
+        Response capped = checkBio(body);
+        assertEquals(429, capped.getStatus());
+        assertTrue(message(capped).contains("2 checks per hour"), message(capped));
+        assertTrue((Long) ((Map<?, ?>) capped.getEntity()).get("retryAfterSeconds") > 60);
+        assertNotNull(capped.getHeaderString("Retry-After"));
+        assertEquals(2, openSea.calls.get(), "capped checks must not call OpenSea");
+
+        // A fresh code doesn't reset the cap: that was the quota-draining loop
+        Map<?, ?> fresh = challenge(ADDRESS);
+        assertEquals(429, checkBio(fresh).getStatus());
+        assertEquals(2, openSea.calls.get());
+
+        clock.advance(Duration.ofHours(1));
+        profileWithBio(ADDRESS, (String) fresh.get("bioText"));
+        assertEquals(200, checkBio(fresh).getStatus(), "checks are allowed again once the hour has passed");
+    }
+
+    @Test
+    void globalCapReturns503BusyForEveryone() {
+        limiter.maxChecksPerHour = 2;
+        profileWithBio(ADDRESS, "not yet");
+        for (String user : new String[] {"user-1", "user-2"}) {
+            when(jwt.getClaim("discord_id")).thenReturn(user);
+            assertEquals(400, checkBio(challenge(ADDRESS)).getStatus());
+        }
+
+        when(jwt.getClaim("discord_id")).thenReturn("user-3");
+        Response busy = checkBio(challenge(ADDRESS));
+        assertEquals(503, busy.getStatus());
+        assertEquals("OPENSEA_BUSY", ((Map<?, ?>) busy.getEntity()).get("code"));
+        assertTrue((Long) ((Map<?, ?>) busy.getEntity()).get("retryAfterSeconds") > 0);
+        assertNotNull(busy.getHeaderString("Retry-After"));
+        assertEquals(2, openSea.calls.get(), "refused checks must not call OpenSea");
+    }
+
+    @Test
+    void humanWaitUsesMinutesForLongWaits() {
+        assertEquals("45 seconds", OpenSeaVerificationResource.humanWait(45));
+        assertEquals("2 minutes", OpenSeaVerificationResource.humanWait(91));
+        assertEquals("60 minutes", OpenSeaVerificationResource.humanWait(3600));
     }
 
     @Test

@@ -10,11 +10,11 @@ import dk.panos.promofacie.kafka.model.TrackingCommand;
 import dk.panos.promofacie.service.NonceStore;
 import dk.panos.promofacie.service.RoleEvaluationService;
 import dk.panos.promofacie.service.opensea.OpenSeaAccount;
+import dk.panos.promofacie.service.opensea.OpenSeaCheckLimiter;
 import dk.panos.promofacie.service.opensea.OpenSeaClient;
 import dk.panos.promofacie.service.opensea.OpenSeaUnavailableException;
 import dk.panos.promofacie.util.EvmAddress;
 import dk.panos.promofacie.util.SolanaAddress;
-import io.quarkus.scheduler.Scheduled;
 import io.quarkus.security.Authenticated;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -30,17 +30,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.security.SecureRandom;
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 /**
@@ -81,6 +77,9 @@ public class OpenSeaVerificationResource {
     OpenSeaClient openSea;
 
     @Inject
+    OpenSeaCheckLimiter checkLimiter;
+
+    @Inject
     WalletPersistenceService walletPersistenceService;
 
     @Inject
@@ -96,13 +95,6 @@ public class OpenSeaVerificationResource {
 
     @ConfigProperty(name = "verifier.siwe.domain", defaultValue = WalletVerificationResource.DEFAULT_SIWE_DOMAIN)
     String siteDomain = WalletVerificationResource.DEFAULT_SIWE_DOMAIN;
-
-    /** Minimum time between two OpenSea lookups for the same user, to protect the API key's quota. */
-    @ConfigProperty(name = "opensea.min-check-interval", defaultValue = "10s")
-    Duration minCheckInterval = Duration.ofSeconds(10);
-
-    Clock clock = Clock.systemUTC();
-    private final Map<String, Instant> lastCheck = new ConcurrentHashMap<>();
 
     @GET
     @Path("/status")
@@ -157,11 +149,10 @@ public class OpenSeaVerificationResource {
         }
         NonceEntry entry = pending.get();
 
-        long waitSeconds = reserveCheck(discordId);
-        if (waitSeconds > 0) {
-            return Response.status(429).entity(Map.of(
-                    "message", "Please wait " + waitSeconds + " seconds before checking again.",
-                    "retryAfterSeconds", waitSeconds)).build();
+        // Every lookup spends the shared API key's quota, so it's limited per user and globally.
+        OpenSeaCheckLimiter.Decision decision = checkLimiter.tryAcquire(discordId);
+        if (!decision.allowed()) {
+            return limited(decision, discordId);
         }
 
         Optional<OpenSeaAccount> account;
@@ -253,27 +244,39 @@ public class OpenSeaVerificationResource {
         });
     }
 
-    /** Returns 0 and records the check if allowed, otherwise the seconds left to wait. */
-    private long reserveCheck(String discordId) {
-        Instant now = clock.instant();
-        AtomicBoolean allowed = new AtomicBoolean(false);
-        Instant last = lastCheck.compute(discordId, (id, previous) -> {
-            if (previous == null || !now.isBefore(previous.plus(minCheckInterval))) {
-                allowed.set(true);
-                return now;
+    /**
+     * A refused check. Per-user limits are 429 and the global cap is 503 (code {@code OPENSEA_BUSY}); both carry
+     * {@code retryAfterSeconds} and a {@code Retry-After} header, and the frontend keeps the code for both.
+     */
+    private Response limited(OpenSeaCheckLimiter.Decision decision, String discordId) {
+        long wait = decision.retryAfterSeconds();
+        return switch (decision.limit()) {
+            case USER_INTERVAL -> limitedResponse(429, null, wait,
+                    "Please wait " + wait + " seconds before checking again.");
+            case USER_HOURLY -> limitedResponse(429, null, wait,
+                    "You've reached the limit of " + decision.cap()
+                            + " checks per hour. Try again in " + humanWait(wait) + ".");
+            case GLOBAL_HOURLY -> {
+                log.warn("OpenSea global check cap reached ({}/hour); refusing discordId={} for {}s",
+                        decision.cap(), discordId, wait);
+                yield limitedResponse(503, "OPENSEA_BUSY", wait,
+                        "Too many OpenSea checks right now. Try again in " + humanWait(wait) + ".");
             }
-            return previous;
-        });
-        if (allowed.get()) {
-            return 0;
-        }
-        return Math.max(1, Duration.between(now, last.plus(minCheckInterval)).toSeconds());
+            case NONE -> throw new IllegalStateException("not limited");
+        };
     }
 
-    @Scheduled(every = "5m", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
-    void purgeThrottle() {
-        Instant cutoff = clock.instant().minus(minCheckInterval);
-        lastCheck.values().removeIf(t -> t.isBefore(cutoff));
+    private static Response limitedResponse(int status, String code, long wait, String message) {
+        Map<String, Object> body = code == null
+                ? Map.of("message", message, "retryAfterSeconds", wait)
+                : Map.of("message", message, "retryAfterSeconds", wait, "code", code);
+        return Response.status(status).header("Retry-After", wait).entity(body).build();
+    }
+
+    static String humanWait(long seconds) {
+        if (seconds < 90) return seconds + " seconds";
+        long minutes = (seconds + 59) / 60;
+        return minutes + " minutes";
     }
 
     /**
