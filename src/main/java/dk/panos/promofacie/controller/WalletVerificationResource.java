@@ -20,7 +20,7 @@ import dk.panos.promofacie.util.Base58;
 import org.cardanofoundation.cip30.AddressFormat;
 import org.cardanofoundation.cip30.CIP30Verifier;
 import org.cardanofoundation.cip30.Cip30VerificationResult;
-import org.cardanofoundation.cip30.MessageFormat;
+import org.bouncycastle.crypto.digests.Blake2bDigest;
 import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.eclipse.microprofile.reactive.messaging.Channel;
 import org.eclipse.microprofile.reactive.messaging.Emitter;
@@ -32,6 +32,7 @@ import org.web3j.crypto.Sign;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
+import java.security.MessageDigest;
 import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Signature;
@@ -85,8 +86,12 @@ public class WalletVerificationResource {
         byte[] bytes = new byte[16];
         new SecureRandom().nextBytes(bytes);
         String rawNonce = HexFormat.of().formatHex(bytes);
+        // Single line of printable ASCII on purpose: the Ledger Cardano app rejects CIP-8 text
+        // messages containing control characters (e.g. '\n'), leading/trailing or double spaces,
+        // and only displays ~160 bytes in full. Eternl reports that device rejection as
+        // "user declined sign data".
         String challengeMessage = String.format(
-                "Promofacie Wallet Verification\nDiscord ID: %s\nNonce: %s\nIssued At: %d",
+                "Promofacie Wallet Verification | Discord ID: %s | Nonce: %s | Issued At: %d",
                 discordId, rawNonce, Instant.now().getEpochSecond()
         );
         nonces.put(discordId, new NonceEntry(challengeMessage, Instant.now().plusSeconds(300)));
@@ -453,18 +458,51 @@ public class WalletVerificationResource {
             var verifier = new CIP30Verifier(signature, key);
             Cip30VerificationResult result = verifier.verify();
 
-            if (!result.isValid()) return false;
-
-            String addressFromSig = result.getAddress(AddressFormat.TEXT).orElse("");
-            if (!addressFromSig.equals(stakeAddress)) {
+            if (!result.isValid()) {
+                log.warn("Cardano verify: invalid COSE signature for address={}, error={}",
+                        stakeAddress, result.getValidationError().orElse(null));
                 return false;
             }
 
-            String message = result.getMessage(MessageFormat.TEXT);
-            return message.equals(nonce);
+            String addressFromSig = result.getAddress(AddressFormat.TEXT).orElse("");
+            if (!addressFromSig.equals(stakeAddress)) {
+                log.warn("Cardano verify: signed address {} does not match requested address {}",
+                        addressFromSig, stakeAddress);
+                return false;
+            }
+
+            // getMessage() is the COSE_Sign1 payload field (raw message, or its hash when hashed=true);
+            // getCosePayload() would be the whole serialized Sig_structure, so don't use it here.
+            boolean matches = cip8PayloadMatchesNonce(result.isHashed(), result.getMessage(), nonce);
+            if (!matches) {
+                log.warn("Cardano verify: signed payload does not match challenge (hashed={}) for address={}",
+                        result.isHashed(), stakeAddress);
+            }
+            return matches;
 
         } catch (Exception e) {
+            log.warn("Cardano verify failed for address={}", stakeAddress, e);
             return false;
         }
+    }
+
+    /**
+     * CIP-8 lets the signer put either the raw message or its Blake2b-224 hash into the COSE_Sign1
+     * payload (header "hashed": true). Hardware wallets such as Ledger may use the hashed form,
+     * so accept both.
+     */
+    static boolean cip8PayloadMatchesNonce(boolean hashed, byte[] payload, String nonce) {
+        if (payload == null || nonce == null) return false;
+        byte[] nonceBytes = nonce.getBytes(StandardCharsets.UTF_8);
+        byte[] expected = hashed ? blake2b224(nonceBytes) : nonceBytes;
+        return MessageDigest.isEqual(expected, payload);
+    }
+
+    static byte[] blake2b224(byte[] input) {
+        Blake2bDigest digest = new Blake2bDigest(224);
+        digest.update(input, 0, input.length);
+        byte[] out = new byte[digest.getDigestSize()];
+        digest.doFinal(out, 0);
+        return out;
     }
 }

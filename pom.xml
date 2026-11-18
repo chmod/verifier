@@ -76,6 +76,12 @@
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-rest-jackson</artifactId>
         </dependency>
+        <!-- Blake2b-224 for hashed CIP-8 payloads; already on the classpath via org.web3j:crypto, declared explicitly so it is not lost if web3j changes -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk15on</artifactId>
+            <version>1.65</version>
+        </dependency>
         <!-- Source: https://mvnrepository.com/artifact/org.cardanofoundation/cip30-data-signature-parser -->
         <dependency>
             <groupId>org.cardanofoundation</groupId>
