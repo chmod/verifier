@@ -150,9 +150,25 @@ class OpenSeaVerificationResourceTest {
 
         String code = (String) body.get("code");
         assertTrue(code.matches("PF-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}"), code);
-        assertEquals("Linking this wallet to Discord @holder_42 on associate.promofacie.site: " + code, body.get("bioText"));
+        assertEquals("Linking this wallet to Discord @holder_42 on PromoFacie: " + code, body.get("bioText"));
         assertNotNull(body.get("nonceId"));
         assertEquals(1800L, body.get("expiresInSeconds"));
+    }
+
+    @Test
+    void bioTextContainsNothingOpenSeaWouldTreatAsALink() {
+        // OpenSea rejects bios with links ("Links must use HTTP or HTTPS and point to OpenSea, X, ..."); a domain
+        // such as associate.promofacie.site counted as one, so the line must never contain a dot.
+        assertFalse(((String) challenge(ADDRESS).get("bioText")).contains("."));
+
+        when(jwt.getClaim("preferred_username")).thenReturn("john.doe");
+        String dotted = (String) challenge(ADDRESS).get("bioText");
+        assertFalse(dotted.contains("."), dotted);
+        assertTrue(dotted.contains("Discord ID user-1 on"), "dotted usernames fall back to the Discord ID");
+
+        resource.bioSiteName = "associate.promofacie.site";
+        assertTrue(((String) challenge(ADDRESS).get("bioText")).contains(" on PromoFacie: "),
+                "a configured name with a dot falls back to the default");
     }
 
     @Test
@@ -229,7 +245,7 @@ class OpenSeaVerificationResourceTest {
     void someoneElsesCodeDoesNotCount() {
         Map<?, ?> mine = challenge(ADDRESS);
         String otherCode = OpenSeaVerificationResource.newCode();
-        profileWithBio(ADDRESS, "Linking this wallet to Discord @holder_42 on associate.promofacie.site: " + otherCode);
+        profileWithBio(ADDRESS, "Linking this wallet to Discord @holder_42 on PromoFacie: " + otherCode);
 
         assertEquals(400, checkBio(mine).getStatus());
     }

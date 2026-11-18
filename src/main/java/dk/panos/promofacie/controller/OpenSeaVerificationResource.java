@@ -61,7 +61,9 @@ public class OpenSeaVerificationResource {
     static final Duration BIO_CHALLENGE_TTL = Duration.ofMinutes(30);
     /** Upper bound on wallets linked from one profile, to bound the work of a single request. */
     static final int MAX_WALLETS_PER_PROFILE = 25;
-    private static final Pattern SAFE_USERNAME = Pattern.compile("^[A-Za-z0-9_.]{2,32}$");
+    // No '.': OpenSea rejects bios containing anything that looks like a link, and "name.something" can look like a
+    // domain. Dotted Discord usernames fall back to the Discord ID.
+    private static final Pattern SAFE_USERNAME = Pattern.compile("^[A-Za-z0-9_]{2,32}$");
     // No 0/O, 1/I/L: the code is typed or pasted by people
     private static final char[] CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789".toCharArray();
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -93,8 +95,13 @@ public class OpenSeaVerificationResource {
     @Channel("solana-tracking-out")
     Emitter<TrackingCommand> solanaTrackingEmitter;
 
-    @ConfigProperty(name = "verifier.siwe.domain", defaultValue = WalletVerificationResource.DEFAULT_SIWE_DOMAIN)
-    String siteDomain = WalletVerificationResource.DEFAULT_SIWE_DOMAIN;
+    /**
+     * The site as named in the bio line. Deliberately not the domain: OpenSea rejects bios with links other than
+     * OpenSea, X, Instagram or YouTube ("Links must use HTTP or HTTPS and point to …"), and a bare domain counts.
+     */
+    @ConfigProperty(name = "opensea.bio-site-name", defaultValue = DEFAULT_BIO_SITE_NAME)
+    String bioSiteName = DEFAULT_BIO_SITE_NAME;
+    static final String DEFAULT_BIO_SITE_NAME = "PromoFacie";
 
     @GET
     @Path("/status")
@@ -288,7 +295,11 @@ public class OpenSeaVerificationResource {
         String who = username != null && SAFE_USERNAME.matcher(username).matches() && !username.matches("\\d+")
                 ? "@" + username
                 : "ID " + discordId;
-        return "Linking this wallet to Discord " + who + " on " + siteDomain + ": " + code;
+        // Any dot could make OpenSea see a link, so a misconfigured name falls back to the default
+        String site = bioSiteName != null && !bioSiteName.isBlank() && !bioSiteName.contains(".")
+                ? bioSiteName.trim()
+                : DEFAULT_BIO_SITE_NAME;
+        return "Linking this wallet to Discord " + who + " on " + site + ": " + code;
     }
 
     static String newCode() {
