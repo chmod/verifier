@@ -17,24 +17,36 @@ public class WalletPersistenceService {
         persist(stakeAddress, discordId, Chain.CARDANO);
     }
 
-    /** @return the previous owner's discordId if the wallet was reassigned from another user, else null */
+    /**
+     * Links the wallet to {@code discordId}. A wallet already linked to a different Discord account is never moved:
+     * the owner must unlink it there first. EVM addresses are matched case-insensitively, since the same address
+     * verifies under any hex casing.
+     *
+     * @throws WalletAlreadyLinkedException if another Discord account holds this wallet (the transaction rolls back)
+     */
     @Transactional
-    public String persist(String address, String discordId, Chain chain) {
-        Wallet wallet = Wallet.find("address = ?1", address).firstResult();
-        String previousOwner = null;
-        if (wallet == null) {
-            wallet = new Wallet();
+    public void persist(String address, String discordId, Chain chain) {
+        Chain targetChain = chain != null ? chain : Chain.CARDANO;
+        List<Wallet> existing = targetChain == Chain.ROBINHOOD
+                ? Wallet.list("lower(address) = lower(?1)", address)
+                : Wallet.list("address = ?1", address);
+
+        for (Wallet w : existing) {
+            if (!discordId.equals(w.getDiscordId())) {
+                log.warn("Refusing to reassign wallet address={} from discordId={} to discordId={}",
+                        address, w.getDiscordId(), discordId);
+                throw new WalletAlreadyLinkedException(address);
+            }
+        }
+
+        Wallet wallet = existing.isEmpty() ? new Wallet() : existing.get(0);
+        if (existing.isEmpty()) {
             wallet.setAddress(address);
-        } else if (!discordId.equals(wallet.getDiscordId())) {
-            previousOwner = wallet.getDiscordId();
-            log.warn("Reassigning wallet address={} from previous discordId={} to new discordId={}",
-                    address, previousOwner, discordId);
         }
         wallet.setDiscordId(discordId);
-        wallet.setChain(chain != null ? chain : Chain.CARDANO);
+        wallet.setChain(targetChain);
         wallet.persist();
-        log.info("Wallet persisted address={} discordId={} chain={}", address, discordId, wallet.getChain());
-        return previousOwner;
+        log.info("Wallet persisted address={} discordId={} chain={}", wallet.getAddress(), discordId, targetChain);
     }
 
     @Transactional

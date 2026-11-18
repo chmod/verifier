@@ -1,11 +1,15 @@
 package dk.panos.promofacie.controller;
 
+import dk.panos.promofacie.controller.model.ChallengeRequest;
 import dk.panos.promofacie.controller.model.NonceEntry;
 import dk.panos.promofacie.controller.model.VerifyRequest;
 import dk.panos.promofacie.controller.model.WalletAssociationResponse;
 import dk.panos.promofacie.db.Chain;
 import dk.panos.promofacie.db.Wallet;
+import dk.panos.promofacie.db.WalletAlreadyLinkedException;
 import dk.panos.promofacie.db.WalletPersistenceService;
+import dk.panos.promofacie.service.NonceStore;
+import dk.panos.promofacie.service.TooManyChallengesException;
 import dk.panos.promofacie.service.RoleEvaluationService;
 import dk.panos.promofacie.kafka.model.TrackingCommand;
 import io.quarkus.security.Authenticated;
@@ -21,6 +25,7 @@ import org.cardanofoundation.cip30.AddressFormat;
 import org.cardanofoundation.cip30.CIP30Verifier;
 import org.cardanofoundation.cip30.Cip30VerificationResult;
 import org.bouncycastle.crypto.digests.Blake2bDigest;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.eclipse.microprofile.reactive.messaging.Channel;
 import org.eclipse.microprofile.reactive.messaging.Emitter;
@@ -37,12 +42,14 @@ import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 @Path("/api/wallet")
 @Authenticated
@@ -70,11 +77,32 @@ public class WalletVerificationResource {
     @Inject
     RoleEvaluationService roleEvaluationService;
 
-    private final ConcurrentHashMap<String, NonceEntry> nonces = new ConcurrentHashMap<>();
+    @Inject
+    NonceStore nonceStore;
+
+    static final Duration NONCE_TTL = Duration.ofMinutes(5);
+    static final long ROBINHOOD_CHAIN_ID = 4663;
+    static final String DEFAULT_SIWE_DOMAIN = "associate.promofacie.site";
+    static final String DEFAULT_SIWE_URI = "https://associate.promofacie.site";
+    private static final Pattern EVM_ADDRESS = Pattern.compile("^0x[0-9a-fA-F]{40}$");
+    // Characters allowed in a SIWE statement (RFC 3986 unreserved) so the Discord ID can't break the message format
+    private static final Pattern SIWE_SAFE_ID = Pattern.compile("^[0-9A-Za-z._~-]{1,64}$");
+
+    /** The site users verify on. Comes from config only: request headers such as Origin are attacker-controlled. */
+    @ConfigProperty(name = "verifier.siwe.domain", defaultValue = DEFAULT_SIWE_DOMAIN)
+    String siweDomain = DEFAULT_SIWE_DOMAIN;
+
+    @ConfigProperty(name = "verifier.siwe.uri", defaultValue = DEFAULT_SIWE_URI)
+    String siweUri = DEFAULT_SIWE_URI;
+
+    /** Legacy challenge (no chain): the single-line format used by Cardano and Solana. */
+    public Response challenge() {
+        return challenge(null);
+    }
 
     @POST
     @Path("/challenge")
-    public Response challenge() {
+    public Response challenge(ChallengeRequest req) {
         log.info("Challenge requested");
         String discordId = jwt.getClaim("discord_id");
         if (discordId == null || discordId.isBlank()) {
@@ -86,17 +114,78 @@ public class WalletVerificationResource {
         byte[] bytes = new byte[16];
         new SecureRandom().nextBytes(bytes);
         String rawNonce = HexFormat.of().formatHex(bytes);
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+
+        NonceEntry entry;
+        if (req != null && isEvmChain(req.chain())) {
+            String address = req.address() != null ? req.address().trim() : "";
+            if (!EVM_ADDRESS.matcher(address).matches()) {
+                return Response.status(400).entity(Map.of("message", "A valid EVM address is required for an EVM challenge")).build();
+            }
+            if (!SIWE_SAFE_ID.matcher(discordId).matches()) {
+                log.warn("discord_id claim contains characters not allowed in a SIWE statement: {}", discordId);
+                return Response.status(400).entity(Map.of("message", "Unsupported Discord ID format")).build();
+            }
+            String checksumAddress = Keys.toChecksumAddress(address);
+            String message = buildSiweMessage(siweDomain, siweUri, checksumAddress, discordId, rawNonce,
+                    now, now.plus(NONCE_TTL));
+            entry = new NonceEntry(message, Chain.ROBINHOOD, checksumAddress);
+        } else {
+            entry = new NonceEntry(legacyChallengeMessage(discordId, rawNonce, now),
+                    req != null ? parseNonEvmChain(req.chain()) : null, null);
+        }
+
+        String nonceId;
+        try {
+            nonceId = nonceStore.issue(discordId, entry, NONCE_TTL);
+        } catch (TooManyChallengesException e) {
+            log.warn("Challenge rate limit hit for discordId={}", discordId);
+            return Response.status(429).entity(Map.of("message",
+                    "Too many verification attempts. Please wait a few minutes and try again.")).build();
+        }
+        log.info("Generated challenge nonceId={} chain={} for discordId={}", nonceId, entry.chain(), discordId);
+        return Response.ok(Map.of("nonce", entry.message(), "nonceId", nonceId)).build();
+    }
+
+    private static String legacyChallengeMessage(String discordId, String rawNonce, Instant issuedAt) {
         // Single line of printable ASCII on purpose: the Ledger Cardano app rejects CIP-8 text
         // messages containing control characters (e.g. '\n'), leading/trailing or double spaces,
         // and only displays ~160 bytes in full. Eternl reports that device rejection as
         // "user declined sign data".
-        String challengeMessage = String.format(
+        return String.format(
                 "Promofacie Wallet Verification | Discord ID: %s | Nonce: %s | Issued At: %d",
-                discordId, rawNonce, Instant.now().getEpochSecond()
+                discordId, rawNonce, issuedAt.getEpochSecond()
         );
-        nonces.put(discordId, new NonceEntry(challengeMessage, Instant.now().plusSeconds(300)));
-        log.info("Generated challenge message for discordId={}", discordId);
-        return Response.ok(Map.of("nonce", challengeMessage)).build();
+    }
+
+    /**
+     * EIP-4361 message. Wallets (MetaMask, Rabby, Rainbow…) parse this format and warn the user when the domain doesn't
+     * match the site requesting the signature, which defeats relaying our challenge through a phishing page.
+     * Multi-line by definition, so it is only used for EVM; Cardano keeps the Ledger-safe single line.
+     */
+    static String buildSiweMessage(String domain, String uri, String checksumAddress, String discordId,
+                                   String nonce, Instant issuedAt, Instant expiresAt) {
+        return domain + " wants you to sign in with your Ethereum account:\n"
+                + checksumAddress + "\n"
+                + "\n"
+                + "Link this wallet to Discord ID " + discordId + " for Promofacie role verification.\n"
+                + "\n"
+                + "URI: " + uri + "\n"
+                + "Version: 1\n"
+                + "Chain ID: " + ROBINHOOD_CHAIN_ID + "\n"
+                + "Nonce: " + nonce + "\n"
+                + "Issued At: " + issuedAt + "\n"
+                + "Expiration Time: " + expiresAt;
+    }
+
+    private static boolean isEvmChain(String chain) {
+        return "ROBINHOOD".equalsIgnoreCase(chain) || "EVM".equalsIgnoreCase(chain);
+    }
+
+    private static Chain parseNonEvmChain(String chain) {
+        if ("CARDANO".equalsIgnoreCase(chain)) return Chain.CARDANO;
+        if ("SOLANA".equalsIgnoreCase(chain)) return Chain.SOLANA;
+        return null;
     }
 
     @POST
@@ -110,8 +199,9 @@ public class WalletVerificationResource {
         }
         log.info("Verify endpoint called: discordId={}, req={}", discordId, req);
 
-        NonceEntry entry = nonces.remove(discordId);
-        if (entry == null || entry.isExpired())
+        // Consumed before the signature check: every attempt, successful or not, burns the challenge.
+        NonceEntry entry = nonceStore.consume(discordId, req.nonceId()).orElse(null);
+        if (entry == null)
             return Response.status(400).entity(Map.of("message", "Nonce missing or expired")).build();
 
         String resolvedAddress = req.getResolvedAddress();
@@ -125,34 +215,46 @@ public class WalletVerificationResource {
                 || resolvedAddress.startsWith("0x")
                 || resolvedAddress.startsWith("0X"));
 
+        Chain targetChain = isSolana ? Chain.SOLANA : (isRobinhood ? Chain.ROBINHOOD : Chain.CARDANO);
+
+        // EVM must sign the SIWE challenge issued for this exact address; a legacy challenge would bypass the domain binding.
+        if (targetChain == Chain.ROBINHOOD
+                && (!entry.isSiwe() || !entry.address().equalsIgnoreCase(resolvedAddress.trim()))) {
+            return Response.status(400).entity(Map.of("message",
+                    "This challenge was not issued for this EVM address. Reload the page and try again.")).build();
+        }
+        if (targetChain != Chain.ROBINHOOD && entry.chain() != null && entry.chain() != targetChain) {
+            return Response.status(400).entity(Map.of("message", "This challenge was issued for a different chain.")).build();
+        }
+
         boolean verified;
         if (isSolana) {
-            verified = verifySolanaWalletOwnership(resolvedAddress, req.signature(), entry.nonce());
+            verified = verifySolanaWalletOwnership(resolvedAddress, req.signature(), entry.message());
         } else if (isRobinhood) {
-            verified = verifyEvmWalletOwnership(resolvedAddress, req.signature(), entry.nonce());
+            verified = verifyEvmWalletOwnership(resolvedAddress, req.signature(), entry.message());
         } else {
-            verified = verifyWalletOwnership(resolvedAddress, req.signature(), req.key(), entry.nonce());
+            verified = verifyWalletOwnership(resolvedAddress, req.signature(), req.key(), entry.message());
         }
 
         if (!verified) {
             return Response.status(400).entity(Map.of("message", "Signature verification failed")).build();
         }
 
-        Chain targetChain = isSolana ? Chain.SOLANA : (isRobinhood ? Chain.ROBINHOOD : Chain.CARDANO);
         log.info("Signature verification successful for address={} discordId={} chain={}", 
                 resolvedAddress, discordId, targetChain);
 
-        // 1. Synchronously persist or reassign in database
-        String previousOwner = walletPersistenceService.persist(resolvedAddress, discordId, targetChain);
+        // 1. Synchronously persist in database. A wallet linked to another Discord account is never moved:
+        // a phished signature must not let an attacker take over someone else's link and roles.
+        try {
+            walletPersistenceService.persist(resolvedAddress, discordId, targetChain);
+        } catch (WalletAlreadyLinkedException e) {
+            return Response.status(Response.Status.CONFLICT).entity(Map.of("message",
+                    "This wallet is already linked to another Discord account. Unlink it from that account first.")).build();
+        }
 
-        // Enqueue role recalculation for user across all configured guilds. A previous owner lost
-        // this wallet's holdings and must be re-evaluated too: the bulk guild sync skips members
-        // left without wallets.
+        // Enqueue role recalculation for user across all configured guilds
         if (roleEvaluationService != null) {
             roleEvaluationService.enqueueUserEvaluationForAllGuilds(discordId);
-            if (previousOwner != null) {
-                roleEvaluationService.enqueueUserEvaluationForAllGuilds(previousOwner);
-            }
         }
 
         // 2. Broadcast tracking command to Kafka

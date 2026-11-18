@@ -1,9 +1,13 @@
 package dk.panos.promofacie.controller;
 
+import dk.panos.promofacie.controller.model.ChallengeRequest;
+import dk.panos.promofacie.controller.model.VerifyRequest;
 import dk.panos.promofacie.controller.model.WalletAssociationResponse;
 import dk.panos.promofacie.db.Chain;
 import dk.panos.promofacie.db.Wallet;
+import dk.panos.promofacie.db.WalletAlreadyLinkedException;
 import dk.panos.promofacie.db.WalletPersistenceService;
+import dk.panos.promofacie.service.InMemoryNonceStore;
 import dk.panos.promofacie.kafka.model.TrackingCommand;
 import jakarta.ws.rs.core.Response;
 import org.eclipse.microprofile.jwt.JsonWebToken;
@@ -11,6 +15,13 @@ import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.web3j.crypto.ECKeyPair;
+import org.web3j.crypto.Keys;
+import org.web3j.crypto.Sign;
+
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
 
 import java.util.List;
 import java.util.Map;
@@ -28,6 +39,7 @@ class WalletVerificationResourceTest {
     private JsonWebToken jwtMock;
     private Emitter<TrackingCommand> emitterMock;
     private Emitter<TrackingCommand> solanaEmitterMock;
+    private Emitter<TrackingCommand> robinhoodEmitterMock;
     private WalletPersistenceService persistenceServiceMock;
     private dk.panos.promofacie.service.RoleEvaluationService roleEvaluationServiceMock;
 
@@ -38,17 +50,223 @@ class WalletVerificationResourceTest {
         jwtMock = mock(JsonWebToken.class);
         emitterMock = mock(Emitter.class);
         solanaEmitterMock = mock(Emitter.class);
+        robinhoodEmitterMock = mock(Emitter.class);
         persistenceServiceMock = mock(WalletPersistenceService.class);
         roleEvaluationServiceMock = mock(dk.panos.promofacie.service.RoleEvaluationService.class);
 
         resource.jwt = jwtMock;
         resource.walletTrackingEmitter = emitterMock;
         resource.solanaTrackingEmitter = solanaEmitterMock;
+        resource.robinhoodTrackingEmitter = robinhoodEmitterMock;
+        resource.nonceStore = new InMemoryNonceStore();
         resource.walletPersistenceService = persistenceServiceMock;
         resource.roleEvaluationService = roleEvaluationServiceMock;
 
         when(emitterMock.send(any(TrackingCommand.class))).thenReturn(CompletableFuture.completedFuture(null));
         when(solanaEmitterMock.send(any(TrackingCommand.class))).thenReturn(CompletableFuture.completedFuture(null));
+        when(robinhoodEmitterMock.send(any(TrackingCommand.class))).thenReturn(CompletableFuture.completedFuture(null));
+    }
+
+    // ---- EVM / Sign-In with Ethereum (EIP-4361) ----
+
+    private static final ECKeyPair EVM_KEY = ECKeyPair.create(BigInteger.valueOf(123456789L));
+    private static final ECKeyPair OTHER_EVM_KEY = ECKeyPair.create(BigInteger.valueOf(987654321L));
+
+    private static String evmAddress(ECKeyPair kp) {
+        return "0x" + Keys.getAddress(kp); // lowercase, like most wallets return it
+    }
+
+    /** personal_sign: EIP-191 prefix + UTF-8 bytes, 65-byte r||s||v hex like wallets return. */
+    private static String personalSign(String message, ECKeyPair kp) {
+        Sign.SignatureData sd = Sign.signPrefixedMessage(message.getBytes(StandardCharsets.UTF_8), kp);
+        HexFormat hex = HexFormat.of();
+        return "0x" + hex.formatHex(sd.getR()) + hex.formatHex(sd.getS()) + hex.formatHex(sd.getV());
+    }
+
+    private Map<?, ?> evmChallenge(String address) {
+        Response res = resource.challenge(new ChallengeRequest("ROBINHOOD", address));
+        assertEquals(200, res.getStatus());
+        return (Map<?, ?>) res.getEntity();
+    }
+
+    @Test
+    void testEvmChallengeIsSiweBoundToDomainAndAddress() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("123456789012345678");
+        String address = evmAddress(EVM_KEY);
+
+        Map<?, ?> body = evmChallenge(address);
+        String message = (String) body.get("nonce");
+        String[] lines = message.split("\n", -1);
+
+        assertNotNull(body.get("nonceId"));
+        assertEquals("associate.promofacie.site wants you to sign in with your Ethereum account:", lines[0]);
+        assertEquals(Keys.toChecksumAddress(address), lines[1]);
+        assertNotEquals(address, lines[1], "address must be EIP-55 checksummed");
+        assertEquals("", lines[2]);
+        assertEquals("Link this wallet to Discord ID 123456789012345678 for Promofacie role verification.", lines[3]);
+        assertEquals("", lines[4]);
+        assertEquals("URI: https://associate.promofacie.site", lines[5]);
+        assertEquals("Version: 1", lines[6]);
+        assertEquals("Chain ID: 4663", lines[7]);
+        assertTrue(lines[8].matches("Nonce: [0-9a-f]{32}"), lines[8]);
+        assertTrue(lines[9].matches("Issued At: \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z"), lines[9]);
+        assertTrue(lines[10].matches("Expiration Time: \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z"), lines[10]);
+        assertEquals(11, lines.length, "no trailing newline or extra fields");
+    }
+
+    @Test
+    void testEvmChallengeUsesConfiguredDomain() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("123");
+        resource.siweDomain = "verify.example.org";
+        resource.siweUri = "https://verify.example.org";
+
+        String message = (String) evmChallenge(evmAddress(EVM_KEY)).get("nonce");
+
+        assertTrue(message.startsWith("verify.example.org wants you to sign in"));
+        assertTrue(message.contains("\nURI: https://verify.example.org\n"));
+    }
+
+    @Test
+    void testEvmChallengeRequiresValidAddress() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("123");
+        assertEquals(400, resource.challenge(new ChallengeRequest("ROBINHOOD", null)).getStatus());
+        assertEquals(400, resource.challenge(new ChallengeRequest("ROBINHOOD", "0x1234")).getStatus());
+        assertEquals(400, resource.challenge(new ChallengeRequest("ROBINHOOD", "not-an-address")).getStatus());
+    }
+
+    @Test
+    void testVerifyEvmSiweEndToEnd() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("evm-user-1");
+        String address = evmAddress(EVM_KEY);
+        Map<?, ?> body = evmChallenge(address);
+
+        Response res = resource.verify(new VerifyRequest(null, address,
+                personalSign((String) body.get("nonce"), EVM_KEY), null, "ROBINHOOD", (String) body.get("nonceId")));
+
+        assertEquals(200, res.getStatus());
+        verify(persistenceServiceMock).persist(address, "evm-user-1", Chain.ROBINHOOD);
+        verify(robinhoodEmitterMock).send(any(TrackingCommand.class));
+    }
+
+    @Test
+    void testVerifyEvmRejectsLegacyChallenge() {
+        // An attacker requesting a challenge without a chain must not get an EVM-usable message without domain binding
+        when(jwtMock.getClaim("discord_id")).thenReturn("evm-user-1");
+        String address = evmAddress(EVM_KEY);
+        Map<?, ?> body = (Map<?, ?>) resource.challenge().getEntity();
+
+        Response res = resource.verify(new VerifyRequest(null, address,
+                personalSign((String) body.get("nonce"), EVM_KEY), null, "ROBINHOOD", (String) body.get("nonceId")));
+
+        assertEquals(400, res.getStatus());
+        verify(persistenceServiceMock, never()).persist(anyString(), anyString(), any());
+    }
+
+    @Test
+    void testVerifyEvmRejectsChallengeIssuedForAnotherAddress() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("evm-user-1");
+        Map<?, ?> body = evmChallenge(evmAddress(EVM_KEY));
+        String other = evmAddress(OTHER_EVM_KEY);
+
+        Response res = resource.verify(new VerifyRequest(null, other,
+                personalSign((String) body.get("nonce"), OTHER_EVM_KEY), null, "ROBINHOOD", (String) body.get("nonceId")));
+
+        assertEquals(400, res.getStatus());
+        verify(persistenceServiceMock, never()).persist(anyString(), anyString(), any());
+    }
+
+    @Test
+    void testVerifyEvmRejectsSignatureFromAnotherKey() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("evm-user-1");
+        String address = evmAddress(EVM_KEY);
+        Map<?, ?> body = evmChallenge(address);
+
+        Response res = resource.verify(new VerifyRequest(null, address,
+                personalSign((String) body.get("nonce"), OTHER_EVM_KEY), null, "ROBINHOOD", (String) body.get("nonceId")));
+
+        assertEquals(400, res.getStatus());
+        verify(persistenceServiceMock, never()).persist(anyString(), anyString(), any());
+    }
+
+    @Test
+    void testVerifyEvmChecksummedAddressMatchesLowercaseChallenge() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("evm-user-1");
+        String address = evmAddress(EVM_KEY);
+        Map<?, ?> body = evmChallenge(address);
+        String checksummed = Keys.toChecksumAddress(address);
+
+        Response res = resource.verify(new VerifyRequest(null, checksummed,
+                personalSign((String) body.get("nonce"), EVM_KEY), null, "ROBINHOOD", (String) body.get("nonceId")));
+
+        assertEquals(200, res.getStatus());
+    }
+
+    @Test
+    void testNonceIsSingleUse() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("evm-user-1");
+        String address = evmAddress(EVM_KEY);
+        Map<?, ?> body = evmChallenge(address);
+        VerifyRequest req = new VerifyRequest(null, address,
+                personalSign((String) body.get("nonce"), EVM_KEY), null, "ROBINHOOD", (String) body.get("nonceId"));
+
+        assertEquals(200, resource.verify(req).getStatus());
+        assertEquals(400, resource.verify(req).getStatus());
+    }
+
+    @Test
+    void testOlderPendingChallengeStillVerifies() {
+        // Mobile: the page reloads while the user is in the wallet app and requests a second challenge;
+        // approving the first (older) request must still work.
+        when(jwtMock.getClaim("discord_id")).thenReturn("evm-user-1");
+        String address = evmAddress(EVM_KEY);
+        Map<?, ?> first = evmChallenge(address);
+        evmChallenge(address);
+
+        Response res = resource.verify(new VerifyRequest(null, address,
+                personalSign((String) first.get("nonce"), EVM_KEY), null, "ROBINHOOD", (String) first.get("nonceId")));
+
+        assertEquals(200, res.getStatus());
+    }
+
+    @Test
+    void testVerifyRejectsChallengeIssuedForAnotherChain() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("user-1");
+        Map<?, ?> body = (Map<?, ?>) resource.challenge(new ChallengeRequest("CARDANO", null)).getEntity();
+
+        Response res = resource.verify(new VerifyRequest("SolAddr", null, "sig", null, "SOLANA", (String) body.get("nonceId")));
+
+        assertEquals(400, res.getStatus());
+    }
+
+    @Test
+    void testChallengeRateLimitReturns429() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("spammer-1");
+        resource.nonceStore = mock(dk.panos.promofacie.service.NonceStore.class);
+        when(resource.nonceStore.issue(anyString(), any(), any()))
+                .thenThrow(new dk.panos.promofacie.service.TooManyChallengesException());
+
+        Response res = resource.challenge(new ChallengeRequest("CARDANO", null));
+
+        assertEquals(429, res.getStatus());
+        assertTrue(((String) ((Map<?, ?>) res.getEntity()).get("message")).contains("Too many"));
+    }
+
+    @Test
+    void testVerifyWalletLinkedToAnotherAccountReturns409() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("attacker-1");
+        String address = evmAddress(EVM_KEY);
+        Map<?, ?> body = evmChallenge(address);
+        doThrow(new WalletAlreadyLinkedException(address))
+                .when(persistenceServiceMock).persist(address, "attacker-1", Chain.ROBINHOOD);
+
+        Response res = resource.verify(new VerifyRequest(null, address,
+                personalSign((String) body.get("nonce"), EVM_KEY), null, "ROBINHOOD", (String) body.get("nonceId")));
+
+        assertEquals(409, res.getStatus());
+        String message = (String) ((Map<?, ?>) res.getEntity()).get("message");
+        assertTrue(message.contains("already linked to another Discord account"));
+        verify(robinhoodEmitterMock, never()).send(any(TrackingCommand.class));
+        verify(roleEvaluationServiceMock, never()).enqueueUserEvaluationForAllGuilds(anyString());
     }
 
     @Test
