@@ -1,5 +1,6 @@
 package dk.panos.promofacie.service;
 
+import dk.panos.promofacie.util.EvmAddress;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
@@ -52,7 +53,8 @@ public class MongoIntegrationScheduler {
                     return;
                 }
                 
-                Wallet wallet = Wallet.find("address = ?1", stakeAddress).firstResult();
+                // Third-party data may carry checksummed EVM addresses; stored EVM addresses are lowercase
+                Wallet wallet = Wallet.find("address = ?1", EvmAddress.normalize(stakeAddress)).firstResult();
                 
                 if (wallet == null) {
                     log.warn("[MongoIntegrationScheduler] Stake address {} is not linked to any user — skipping outbox enqueue", stakeAddress);

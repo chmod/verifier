@@ -5,6 +5,8 @@ import jakarta.transaction.Transactional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import dk.panos.promofacie.util.EvmAddress;
+
 import java.util.List;
 
 @ApplicationScoped
@@ -41,7 +43,8 @@ public class WalletPersistenceService {
 
         Wallet wallet = existing.isEmpty() ? new Wallet() : existing.get(0);
         if (existing.isEmpty()) {
-            wallet.setAddress(address);
+            // EVM: store lowercase like the indexer reports it; role evaluation matches addresses exactly.
+            wallet.setAddress(EvmAddress.normalize(address));
         }
         wallet.setDiscordId(discordId);
         wallet.setChain(targetChain);
@@ -56,12 +59,12 @@ public class WalletPersistenceService {
 
     @Transactional
     public Wallet findByAddressAndDiscordId(String stakeAddress, String discordId) {
-        return Wallet.find("discordId = ?1 and address = ?2", discordId, stakeAddress).firstResult();
+        return Wallet.find("discordId = ?1 and address = ?2", discordId, EvmAddress.normalize(stakeAddress)).firstResult();
     }
 
     @Transactional
     public boolean deleteByAddressAndDiscordId(String stakeAddress, String discordId) {
-        long deletedCount = Wallet.delete("discordId = ?1 and address = ?2", discordId, stakeAddress);
+        long deletedCount = Wallet.delete("discordId = ?1 and address = ?2", discordId, EvmAddress.normalize(stakeAddress));
         log.info("Wallet unlinked count={} stakeAddress={} discordId={}", deletedCount, stakeAddress, discordId);
         return deletedCount > 0;
     }

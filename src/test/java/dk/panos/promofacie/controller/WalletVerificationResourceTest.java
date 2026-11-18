@@ -238,17 +238,109 @@ class WalletVerificationResourceTest {
         assertEquals(400, res.getStatus());
     }
 
+    // ---- Solana / Sign In With Solana (SIWS) ----
+
+    private static java.security.KeyPair solanaKeyPair() throws Exception {
+        return java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    }
+
+    private static String solanaAddress(java.security.KeyPair kp) {
+        return dk.panos.promofacie.util.Base58.encode(java.util.Arrays.copyOfRange(kp.getPublic().getEncoded(), 12, 44));
+    }
+
+    /** Phantom/Solflare signMessage: raw Ed25519 over the UTF-8 bytes, returned here as Base58. */
+    private static String solanaSign(String message, java.security.KeyPair kp) throws Exception {
+        java.security.Signature signer = java.security.Signature.getInstance("Ed25519");
+        signer.initSign(kp.getPrivate());
+        signer.update(message.getBytes(StandardCharsets.UTF_8));
+        return dk.panos.promofacie.util.Base58.encode(signer.sign());
+    }
+
     @Test
-    void testChallengeRateLimitReturns429() {
-        when(jwtMock.getClaim("discord_id")).thenReturn("spammer-1");
-        resource.nonceStore = mock(dk.panos.promofacie.service.NonceStore.class);
-        when(resource.nonceStore.issue(anyString(), any(), any()))
-                .thenThrow(new dk.panos.promofacie.service.TooManyChallengesException());
+    void testSolanaChallengeIsSiwsBoundToDomainAndAddress() throws Exception {
+        when(jwtMock.getClaim("discord_id")).thenReturn("123456789012345678");
+        String address = solanaAddress(solanaKeyPair());
 
-        Response res = resource.challenge(new ChallengeRequest("CARDANO", null));
+        Map<?, ?> body = (Map<?, ?>) resource.challenge(new ChallengeRequest("SOLANA", address)).getEntity();
+        String[] lines = ((String) body.get("nonce")).split("\n", -1);
 
-        assertEquals(429, res.getStatus());
-        assertTrue(((String) ((Map<?, ?>) res.getEntity()).get("message")).contains("Too many"));
+        assertNotNull(body.get("nonceId"));
+        assertEquals("associate.promofacie.site wants you to sign in with your Solana account:", lines[0]);
+        assertEquals(address, lines[1]);
+        assertEquals("", lines[2]);
+        assertEquals("Link this wallet to Discord ID 123456789012345678 for Promofacie role verification.", lines[3]);
+        assertEquals("", lines[4]);
+        assertEquals("URI: https://associate.promofacie.site", lines[5]);
+        assertEquals("Version: 1", lines[6]);
+        assertEquals("Chain ID: mainnet", lines[7]);
+        assertTrue(lines[8].matches("Nonce: [0-9a-f]{32}"), lines[8]);
+        assertTrue(lines[9].startsWith("Issued At: "), lines[9]);
+        assertTrue(lines[10].startsWith("Expiration Time: "), lines[10]);
+        assertEquals(11, lines.length, "no trailing newline or extra fields");
+    }
+
+    @Test
+    void testSolanaChallengeRequiresValidAddress() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("123");
+        assertEquals(400, resource.challenge(new ChallengeRequest("SOLANA", null)).getStatus());
+        assertEquals(400, resource.challenge(new ChallengeRequest("SOLANA", "0x7dB967bcF885C8ae4bBFdB5fFff5D9ebF96AA0Ed")).getStatus());
+        assertEquals(400, resource.challenge(new ChallengeRequest("SOLANA", "abc")).getStatus());
+        // Base58 but not 32 bytes
+        assertEquals(400, resource.challenge(new ChallengeRequest("SOLANA",
+                dk.panos.promofacie.util.Base58.encode(new byte[20]))).getStatus());
+    }
+
+    @Test
+    void testVerifySolanaRejectsLegacyChallenge() throws Exception {
+        // An attacker requesting a challenge without a chain must not get a Solana-usable message without domain binding
+        when(jwtMock.getClaim("discord_id")).thenReturn("solana-user-456");
+        java.security.KeyPair kp = solanaKeyPair();
+        Map<?, ?> body = (Map<?, ?>) resource.challenge().getEntity();
+
+        Response res = resource.verify(new VerifyRequest(solanaAddress(kp), null,
+                solanaSign((String) body.get("nonce"), kp), null, "SOLANA", (String) body.get("nonceId")));
+
+        assertEquals(400, res.getStatus());
+        verify(persistenceServiceMock, never()).persist(anyString(), anyString(), any());
+    }
+
+    @Test
+    void testVerifySolanaRejectsChallengeIssuedForAnotherAddress() throws Exception {
+        when(jwtMock.getClaim("discord_id")).thenReturn("solana-user-456");
+        java.security.KeyPair issuedFor = solanaKeyPair();
+        java.security.KeyPair signer = solanaKeyPair();
+        Map<?, ?> body = (Map<?, ?>) resource.challenge(new ChallengeRequest("SOLANA", solanaAddress(issuedFor))).getEntity();
+
+        Response res = resource.verify(new VerifyRequest(solanaAddress(signer), null,
+                solanaSign((String) body.get("nonce"), signer), null, "SOLANA", (String) body.get("nonceId")));
+
+        assertEquals(400, res.getStatus());
+        verify(persistenceServiceMock, never()).persist(anyString(), anyString(), any());
+    }
+
+    @Test
+    void testVerifySolanaRejectsSignatureFromAnotherKey() throws Exception {
+        when(jwtMock.getClaim("discord_id")).thenReturn("solana-user-456");
+        java.security.KeyPair kp = solanaKeyPair();
+        String address = solanaAddress(kp);
+        Map<?, ?> body = (Map<?, ?>) resource.challenge(new ChallengeRequest("SOLANA", address)).getEntity();
+
+        Response res = resource.verify(new VerifyRequest(address, null,
+                solanaSign((String) body.get("nonce"), solanaKeyPair()), null, "SOLANA", (String) body.get("nonceId")));
+
+        assertEquals(400, res.getStatus());
+        verify(persistenceServiceMock, never()).persist(anyString(), anyString(), any());
+    }
+
+    @Test
+    void testVerifyCardanoRejectsSolanaChallenge() {
+        when(jwtMock.getClaim("discord_id")).thenReturn("user-1");
+        Map<?, ?> body = (Map<?, ?>) resource.challenge(new ChallengeRequest("SOLANA",
+                dk.panos.promofacie.util.Base58.encode(new byte[32]))).getEntity();
+
+        Response res = resource.verify(new VerifyRequest("stake1u", null, "84a4", "a401", null, (String) body.get("nonceId")));
+
+        assertEquals(400, res.getStatus());
     }
 
     @Test
@@ -514,9 +606,11 @@ class WalletVerificationResourceTest {
         java.security.KeyPair kp = kpg.generateKeyPair();
 
         when(jwtMock.getClaim("discord_id")).thenReturn("solana-user-456");
+        byte[] rawPubKey = java.util.Arrays.copyOfRange(kp.getPublic().getEncoded(), 12, 44);
+        String solAddress = dk.panos.promofacie.util.Base58.encode(rawPubKey);
 
-        // Request challenge
-        Response challengeRes = resource.challenge();
+        // Request the SIWS challenge for this address
+        Response challengeRes = resource.challenge(new ChallengeRequest("SOLANA", solAddress));
         Map<?, ?> body = (Map<?, ?>) challengeRes.getEntity();
         String nonce = (String) body.get("nonce");
 
@@ -526,12 +620,11 @@ class WalletVerificationResourceTest {
         signer.update(nonce.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         byte[] sig = signer.sign();
 
-        byte[] rawPubKey = java.util.Arrays.copyOfRange(kp.getPublic().getEncoded(), 12, 44);
-        String solAddress = dk.panos.promofacie.util.Base58.encode(rawPubKey);
         String sigBase58 = dk.panos.promofacie.util.Base58.encode(sig);
 
         dk.panos.promofacie.controller.model.VerifyRequest verifyReq =
-                new dk.panos.promofacie.controller.model.VerifyRequest(solAddress, null, sigBase58, null, "SOLANA");
+                new dk.panos.promofacie.controller.model.VerifyRequest(solAddress, null, sigBase58, null, "SOLANA",
+                        (String) body.get("nonceId"));
 
         Response verifyRes = resource.verify(verifyReq);
         assertEquals(Response.Status.OK.getStatusCode(), verifyRes.getStatus());

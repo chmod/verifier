@@ -36,6 +36,17 @@ class RequestJsonMappingTest {
     }
 
     @Test
+    void openSeaRequestsReadCamelCaseFields() throws Exception {
+        OpenSeaVerifyRequest verify = appMapper().readValue(
+                "{\"nonceId\":\"3f2b6c1e-8d4a-4f7e-9b1c-2a5d6e7f8a9b\"}", OpenSeaVerifyRequest.class);
+        OpenSeaChallengeRequest challenge = appMapper().readValue(
+                "{\"address\":\"0xabc\"}", OpenSeaChallengeRequest.class);
+
+        assertEquals("3f2b6c1e-8d4a-4f7e-9b1c-2a5d6e7f8a9b", verify.nonceId());
+        assertEquals("0xabc", challenge.address());
+    }
+
+    @Test
     void challengeRequestReadsChainAndAddress() throws Exception {
         ChallengeRequest req = appMapper().readValue("""
                 {"chain":"ROBINHOOD","address":"0xabc"}""", ChallengeRequest.class);

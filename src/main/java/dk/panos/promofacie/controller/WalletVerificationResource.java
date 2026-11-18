@@ -9,7 +9,6 @@ import dk.panos.promofacie.db.Wallet;
 import dk.panos.promofacie.db.WalletAlreadyLinkedException;
 import dk.panos.promofacie.db.WalletPersistenceService;
 import dk.panos.promofacie.service.NonceStore;
-import dk.panos.promofacie.service.TooManyChallengesException;
 import dk.panos.promofacie.service.RoleEvaluationService;
 import dk.panos.promofacie.kafka.model.TrackingCommand;
 import io.quarkus.security.Authenticated;
@@ -82,10 +81,12 @@ public class WalletVerificationResource {
 
     static final Duration NONCE_TTL = Duration.ofMinutes(5);
     static final long ROBINHOOD_CHAIN_ID = 4663;
+    /** SIWS chain reference for Solana mainnet. */
+    static final String SOLANA_CHAIN_ID = "mainnet";
     static final String DEFAULT_SIWE_DOMAIN = "associate.promofacie.site";
     static final String DEFAULT_SIWE_URI = "https://associate.promofacie.site";
     private static final Pattern EVM_ADDRESS = Pattern.compile("^0x[0-9a-fA-F]{40}$");
-    // Characters allowed in a SIWE statement (RFC 3986 unreserved) so the Discord ID can't break the message format
+    // Characters allowed in a SIWE/SIWS statement (RFC 3986 unreserved) so the Discord ID can't break the message format
     private static final Pattern SIWE_SAFE_ID = Pattern.compile("^[0-9A-Za-z._~-]{1,64}$");
 
     /** The site users verify on. Comes from config only: request headers such as Origin are attacker-controlled. */
@@ -95,7 +96,7 @@ public class WalletVerificationResource {
     @ConfigProperty(name = "verifier.siwe.uri", defaultValue = DEFAULT_SIWE_URI)
     String siweUri = DEFAULT_SIWE_URI;
 
-    /** Legacy challenge (no chain): the single-line format used by Cardano and Solana. */
+    /** Legacy challenge (no chain): the single-line format, accepted only for Cardano. */
     public Response challenge() {
         return challenge(null);
     }
@@ -116,33 +117,36 @@ public class WalletVerificationResource {
         String rawNonce = HexFormat.of().formatHex(bytes);
         Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
 
+        boolean evm = req != null && isEvmChain(req.chain());
+        boolean solana = req != null && "SOLANA".equalsIgnoreCase(req.chain());
+        if ((evm || solana) && !SIWE_SAFE_ID.matcher(discordId).matches()) {
+            log.warn("discord_id claim contains characters not allowed in a sign-in statement: {}", discordId);
+            return Response.status(400).entity(Map.of("message", "Unsupported Discord ID format")).build();
+        }
+        String address = req != null && req.address() != null ? req.address().trim() : "";
+
         NonceEntry entry;
-        if (req != null && isEvmChain(req.chain())) {
-            String address = req.address() != null ? req.address().trim() : "";
+        if (evm) {
             if (!EVM_ADDRESS.matcher(address).matches()) {
                 return Response.status(400).entity(Map.of("message", "A valid EVM address is required for an EVM challenge")).build();
             }
-            if (!SIWE_SAFE_ID.matcher(discordId).matches()) {
-                log.warn("discord_id claim contains characters not allowed in a SIWE statement: {}", discordId);
-                return Response.status(400).entity(Map.of("message", "Unsupported Discord ID format")).build();
-            }
             String checksumAddress = Keys.toChecksumAddress(address);
-            String message = buildSiweMessage(siweDomain, siweUri, checksumAddress, discordId, rawNonce,
-                    now, now.plus(NONCE_TTL));
+            String message = buildSignInMessage("Ethereum", siweDomain, siweUri, checksumAddress, discordId,
+                    Long.toString(ROBINHOOD_CHAIN_ID), rawNonce, now, now.plus(NONCE_TTL));
             entry = new NonceEntry(message, Chain.ROBINHOOD, checksumAddress);
+        } else if (solana) {
+            if (!isSolanaAddress(address)) {
+                return Response.status(400).entity(Map.of("message", "A valid Solana address is required for a Solana challenge")).build();
+            }
+            String message = buildSignInMessage("Solana", siweDomain, siweUri, address, discordId,
+                    SOLANA_CHAIN_ID, rawNonce, now, now.plus(NONCE_TTL));
+            entry = new NonceEntry(message, Chain.SOLANA, address);
         } else {
             entry = new NonceEntry(legacyChallengeMessage(discordId, rawNonce, now),
                     req != null ? parseNonEvmChain(req.chain()) : null, null);
         }
 
-        String nonceId;
-        try {
-            nonceId = nonceStore.issue(discordId, entry, NONCE_TTL);
-        } catch (TooManyChallengesException e) {
-            log.warn("Challenge rate limit hit for discordId={}", discordId);
-            return Response.status(429).entity(Map.of("message",
-                    "Too many verification attempts. Please wait a few minutes and try again.")).build();
-        }
+        String nonceId = nonceStore.issue(discordId, entry, NONCE_TTL);
         log.info("Generated challenge nonceId={} chain={} for discordId={}", nonceId, entry.chain(), discordId);
         return Response.ok(Map.of("nonce", entry.message(), "nonceId", nonceId)).build();
     }
@@ -159,23 +163,31 @@ public class WalletVerificationResource {
     }
 
     /**
-     * EIP-4361 message. Wallets (MetaMask, Rabby, Rainbow…) parse this format and warn the user when the domain doesn't
-     * match the site requesting the signature, which defeats relaying our challenge through a phishing page.
-     * Multi-line by definition, so it is only used for EVM; Cardano keeps the Ledger-safe single line.
+     * EIP-4361 (Sign-In with Ethereum) or SIWS (Sign In With Solana) message; the two share one format. Wallets
+     * (MetaMask, Rabby, Rainbow; Phantom for SIWS) parse it and warn about, or refuse, a domain that doesn't match the
+     * site requesting the signature, which defeats relaying our challenge through a phishing page. Multi-line by
+     * definition, so Cardano keeps the Ledger-safe single line.
+     *
+     * @param accountKind "Ethereum" or "Solana"
+     * @param chainId     EIP-155 chain id for EVM, a SIWS chain reference ("mainnet") for Solana
      */
-    static String buildSiweMessage(String domain, String uri, String checksumAddress, String discordId,
-                                   String nonce, Instant issuedAt, Instant expiresAt) {
-        return domain + " wants you to sign in with your Ethereum account:\n"
-                + checksumAddress + "\n"
+    static String buildSignInMessage(String accountKind, String domain, String uri, String address, String discordId,
+                                     String chainId, String nonce, Instant issuedAt, Instant expiresAt) {
+        return domain + " wants you to sign in with your " + accountKind + " account:\n"
+                + address + "\n"
                 + "\n"
                 + "Link this wallet to Discord ID " + discordId + " for Promofacie role verification.\n"
                 + "\n"
                 + "URI: " + uri + "\n"
                 + "Version: 1\n"
-                + "Chain ID: " + ROBINHOOD_CHAIN_ID + "\n"
+                + "Chain ID: " + chainId + "\n"
                 + "Nonce: " + nonce + "\n"
                 + "Issued At: " + issuedAt + "\n"
                 + "Expiration Time: " + expiresAt;
+    }
+
+    static boolean isSolanaAddress(String address) {
+        return dk.panos.promofacie.util.SolanaAddress.isValid(address);
     }
 
     private static boolean isEvmChain(String chain) {
@@ -184,7 +196,6 @@ public class WalletVerificationResource {
 
     private static Chain parseNonEvmChain(String chain) {
         if ("CARDANO".equalsIgnoreCase(chain)) return Chain.CARDANO;
-        if ("SOLANA".equalsIgnoreCase(chain)) return Chain.SOLANA;
         return null;
     }
 
@@ -203,6 +214,9 @@ public class WalletVerificationResource {
         NonceEntry entry = nonceStore.consume(discordId, req.nonceId()).orElse(null);
         if (entry == null)
             return Response.status(400).entity(Map.of("message", "Nonce missing or expired")).build();
+        if (!entry.isSignature())
+            return Response.status(400).entity(Map.of("message",
+                    "This code is for OpenSea profile verification, not for signing.")).build();
 
         String resolvedAddress = req.getResolvedAddress();
         if (resolvedAddress == null || resolvedAddress.isBlank()) {
@@ -219,11 +233,17 @@ public class WalletVerificationResource {
 
         // EVM must sign the SIWE challenge issued for this exact address; a legacy challenge would bypass the domain binding.
         if (targetChain == Chain.ROBINHOOD
-                && (!entry.isSiwe() || !entry.address().equalsIgnoreCase(resolvedAddress.trim()))) {
+                && (!entry.isSignInFor(Chain.ROBINHOOD) || !entry.address().equalsIgnoreCase(resolvedAddress.trim()))) {
             return Response.status(400).entity(Map.of("message",
                     "This challenge was not issued for this EVM address. Reload the page and try again.")).build();
         }
-        if (targetChain != Chain.ROBINHOOD && entry.chain() != null && entry.chain() != targetChain) {
+        // Solana likewise only accepts the SIWS challenge for this exact (case-sensitive Base58) address
+        if (targetChain == Chain.SOLANA
+                && (!entry.isSignInFor(Chain.SOLANA) || !entry.address().equals(resolvedAddress.trim()))) {
+            return Response.status(400).entity(Map.of("message",
+                    "This challenge was not issued for this Solana address. Reload the page and try again.")).build();
+        }
+        if (targetChain == Chain.CARDANO && entry.chain() != null && entry.chain() != Chain.CARDANO) {
             return Response.status(400).entity(Map.of("message", "This challenge was issued for a different chain.")).build();
         }
 

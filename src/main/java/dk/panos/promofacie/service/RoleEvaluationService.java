@@ -1,5 +1,6 @@
 package dk.panos.promofacie.service;
 
+import dk.panos.promofacie.util.EvmAddress;
 import dk.panos.promofacie.db.GuildRoleRule;
 import dk.panos.promofacie.db.RuleTraitCriteria;
 import dk.panos.promofacie.db.UserAssetInventory;
@@ -45,7 +46,7 @@ public class RoleEvaluationService {
             return;
         }
 
-        Wallet wallet = Wallet.find("address = ?1", stakeAddress).firstResult();
+        Wallet wallet = Wallet.find("address = ?1", EvmAddress.normalize(stakeAddress)).firstResult();
         if (wallet == null) {
             log.warn("[RoleEvaluation] Stake address {} is not linked to any user — skipping outbox enqueue", stakeAddress);
             return;
