@@ -50,9 +50,13 @@ public class OpenSeaCheckLimiter {
     @ConfigProperty(name = "opensea.max-checks-per-user-per-hour", defaultValue = "10")
     public int maxChecksPerUserPerHour = 10;
 
-    /** Default sized below the smallest documented quota (30/hour); raise it to match the issued key's tier. */
-    @ConfigProperty(name = "opensea.max-checks-per-hour", defaultValue = "25")
-    public int maxChecksPerHour = 25;
+    /**
+     * The issued key is on OpenSea's self-serve tier: 120 read requests per minute (about 7,200 per hour), shared by
+     * every API key on the OpenSea account. 3,000 per hour leaves room for other keys and for bursts, which OpenSea
+     * limits per minute; an OpenSea 429 still surfaces as a retryable 503.
+     */
+    @ConfigProperty(name = "opensea.max-checks-per-hour", defaultValue = "3000")
+    public int maxChecksPerHour = 3000;
 
     public Clock clock = Clock.systemUTC();
 

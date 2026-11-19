@@ -145,12 +145,12 @@ class OpenSeaVerificationResourceTest {
     }
 
     @Test
-    void challengeReturnsCodeAndBioTextNamingSiteAndUser() {
+    void challengeReturnsCodeAndBioTextNamingTheSite() {
         Map<?, ?> body = challenge(ADDRESS);
 
         String code = (String) body.get("code");
         assertTrue(code.matches("PF-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}"), code);
-        assertEquals("Linking this wallet to Discord @holder_42 on PromoFacie: " + code, body.get("bioText"));
+        assertEquals("Verifying this wallet on PromoFacie: " + code, body.get("bioText"));
         assertNotNull(body.get("nonceId"));
         assertEquals(1800L, body.get("expiresInSeconds"));
     }
@@ -161,22 +161,20 @@ class OpenSeaVerificationResourceTest {
         // such as associate.promofacie.site counted as one, so the line must never contain a dot.
         assertFalse(((String) challenge(ADDRESS).get("bioText")).contains("."));
 
-        when(jwt.getClaim("preferred_username")).thenReturn("john.doe");
-        String dotted = (String) challenge(ADDRESS).get("bioText");
-        assertFalse(dotted.contains("."), dotted);
-        assertTrue(dotted.contains("Discord ID user-1 on"), "dotted usernames fall back to the Discord ID");
-
         resource.bioSiteName = "associate.promofacie.site";
         assertTrue(((String) challenge(ADDRESS).get("bioText")).contains(" on PromoFacie: "),
                 "a configured name with a dot falls back to the default");
     }
 
     @Test
-    void bioTextFallsBackToDiscordIdForUnsafeOrNumericUsernames() {
-        when(jwt.getClaim("preferred_username")).thenReturn("evil\nname");
-        assertTrue(((String) challenge(ADDRESS).get("bioText")).contains("Discord ID user-1 on"));
-        when(jwt.getClaim("preferred_username")).thenReturn("123456789012345678");
-        assertTrue(((String) challenge(ADDRESS).get("bioText")).contains("Discord ID user-1 on"));
+    void bioTextContainsNoPersonalData() {
+        when(jwt.getClaim("discord_id")).thenReturn("872548251818143794");
+        when(jwt.getClaim("preferred_username")).thenReturn("holder_42");
+        String bio = (String) challenge(ADDRESS).get("bioText");
+        assertFalse(bio.contains("872548251818143794"), bio);
+        assertFalse(bio.contains("holder_42"), bio);
+        assertFalse(bio.contains(java.util.Base64.getEncoder().encodeToString("872548251818143794".getBytes())), bio);
+        assertFalse(bio.contains("Discord"), "no reference to the member's Discord account at all");
     }
 
     @Test
@@ -245,7 +243,7 @@ class OpenSeaVerificationResourceTest {
     void someoneElsesCodeDoesNotCount() {
         Map<?, ?> mine = challenge(ADDRESS);
         String otherCode = OpenSeaVerificationResource.newCode();
-        profileWithBio(ADDRESS, "Linking this wallet to Discord @holder_42 on PromoFacie: " + otherCode);
+        profileWithBio(ADDRESS, "Verifying this wallet on PromoFacie: " + otherCode);
 
         assertEquals(400, checkBio(mine).getStatus());
     }
@@ -423,6 +421,27 @@ class OpenSeaVerificationResourceTest {
         assertTrue((Long) ((Map<?, ?>) busy.getEntity()).get("retryAfterSeconds") > 0);
         assertNotNull(busy.getHeaderString("Retry-After"));
         assertEquals(2, openSea.calls.get(), "refused checks must not call OpenSea");
+    }
+
+    @Test
+    void bioMissingNamesTheProfileThatWasChecked() {
+        Map<?, ?> body = challenge(ADDRESS);
+        openSea.profiles.put(ADDRESS_LC, new OpenSeaAccount(ADDRESS, "someone else's bio", java.util.List.of(), "slander"));
+
+        Response res = checkBio(body);
+        assertEquals("BIO_CODE_MISSING", ((Map<?, ?>) res.getEntity()).get("code"));
+        assertTrue(message(res).startsWith("The OpenSea profile @slander (0x7db9…a0ed) doesn't show your code yet."),
+                message(res));
+        assertTrue(message(res).contains("If it isn't, start over"));
+    }
+
+    @Test
+    void profileLabelOnlyShowsPlainUsernames() {
+        String addr = "0x1532" + "0".repeat(30) + "70ab";
+        assertEquals("@slander (0x1532…70ab)", OpenSeaVerificationResource.profileLabel("slander", addr));
+        assertEquals("0x1532…70ab", OpenSeaVerificationResource.profileLabel(null, addr));
+        assertEquals("0x1532…70ab", OpenSeaVerificationResource.profileLabel("<script>", addr));
+        assertEquals("0x1532…70ab", OpenSeaVerificationResource.profileLabel("x".repeat(41), addr));
     }
 
     @Test

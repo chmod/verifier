@@ -96,7 +96,8 @@ public class OpenSeaHttpClient implements OpenSeaClient {
             body.path("wallets").forEach(w -> {
                 if (w.isTextual() && !w.asText().isBlank()) wallets.add(w.asText().trim());
             });
-            return Optional.of(new OpenSeaAccount(returnedAddress, body.path("bio").asText(""), wallets));
+            String username = body.path("username").isTextual() ? body.path("username").asText() : null;
+            return Optional.of(new OpenSeaAccount(returnedAddress, body.path("bio").asText(""), wallets, username));
         } catch (IOException e) {
             throw new OpenSeaUnavailableException("Unreadable OpenSea response", e);
         }

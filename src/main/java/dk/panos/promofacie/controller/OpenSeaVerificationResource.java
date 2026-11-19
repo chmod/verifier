@@ -61,9 +61,8 @@ public class OpenSeaVerificationResource {
     static final Duration BIO_CHALLENGE_TTL = Duration.ofMinutes(30);
     /** Upper bound on wallets linked from one profile, to bound the work of a single request. */
     static final int MAX_WALLETS_PER_PROFILE = 25;
-    // No '.': OpenSea rejects bios containing anything that looks like a link, and "name.something" can look like a
-    // domain. Dotted Discord usernames fall back to the Discord ID.
-    private static final Pattern SAFE_USERNAME = Pattern.compile("^[A-Za-z0-9_]{2,32}$");
+    /** OpenSea usernames we echo back in messages (third-party text, so plain names only). */
+    private static final Pattern OPENSEA_USERNAME = Pattern.compile("^[A-Za-z0-9_.-]{1,40}$");
     // No 0/O, 1/I/L: the code is typed or pasted by people
     private static final char[] CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789".toCharArray();
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -126,7 +125,7 @@ public class OpenSeaVerificationResource {
         }
 
         String code = newCode();
-        String bioText = bioText(code, discordId);
+        String bioText = bioText(code);
         NonceEntry entry = new NonceEntry(code, entryChain, EvmAddress.normalize(address),
                 NonceEntry.ProofMethod.OPENSEA_BIO);
         String nonceId = nonceStore.issue(discordId, entry, BIO_CHALLENGE_TTL);
@@ -182,8 +181,11 @@ public class OpenSeaVerificationResource {
         }
         String bio = account.get().bio();
         if (bio == null || !bio.contains(entry.message())) {
+            // Name the profile we checked: a member who entered someone else's address sees it isn't theirs
             return Response.status(Response.Status.BAD_REQUEST).entity(Map.of(
-                    "message", "Your OpenSea bio doesn't show the code yet. Save your profile, wait a few seconds and check again.",
+                    "message", "The OpenSea profile " + profileLabel(account.get().username(), entry.address())
+                            + " doesn't show your code yet. If this is your profile, save your bio, wait a few seconds"
+                            + " and check again. If it isn't, start over with an address from your own OpenSea profile.",
                     "code", "BIO_CODE_MISSING")).build();
         }
 
@@ -233,6 +235,17 @@ public class OpenSeaVerificationResource {
             return supported.subList(0, MAX_WALLETS_PER_PROFILE);
         }
         return supported;
+    }
+
+    /** "@username (0x1234…abcd)", or just the shortened address when OpenSea has no displayable username. */
+    static String profileLabel(String username, String address) {
+        String shortAddress = address.length() > 12
+                ? address.substring(0, 6) + "…" + address.substring(address.length() - 4)
+                : address;
+        // Third-party text: only show a plain username, never arbitrary content
+        return username != null && OPENSEA_USERNAME.matcher(username).matches()
+                ? "@" + username + " (" + shortAddress + ")"
+                : shortAddress;
     }
 
     /** ROBINHOOD for EVM addresses, SOLANA for Solana addresses, null for anything else. */
@@ -287,19 +300,17 @@ public class OpenSeaVerificationResource {
     }
 
     /**
-     * The line the user pastes into their bio. It names the site and the Discord account so that a scam asking a
-     * victim to paste someone else's code stands out.
+     * The line the user pastes into their public OpenSea bio. It contains no personal data (GDPR): no Discord name or
+     * ID, not even encoded or hashed, since Discord IDs are public and any encoding of them is still personal data.
+     * Only our server can tie the random code to a Discord account, and only until the code is used or expires
+     * (the nonce store is in memory). The site name stays so the purpose is clear to whoever reads the bio.
      */
-    String bioText(String code, String discordId) {
-        String username = jwt.getClaim("preferred_username");
-        String who = username != null && SAFE_USERNAME.matcher(username).matches() && !username.matches("\\d+")
-                ? "@" + username
-                : "ID " + discordId;
+    String bioText(String code) {
         // Any dot could make OpenSea see a link, so a misconfigured name falls back to the default
         String site = bioSiteName != null && !bioSiteName.isBlank() && !bioSiteName.contains(".")
                 ? bioSiteName.trim()
                 : DEFAULT_BIO_SITE_NAME;
-        return "Linking this wallet to Discord " + who + " on " + site + ": " + code;
+        return "Verifying this wallet on " + site + ": " + code;
     }
 
     static String newCode() {

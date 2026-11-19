@@ -58,6 +58,7 @@ class OpenSeaHttpClientTest {
 
         assertEquals("0x7dB967bcF885C8ae4bBFdB5fFff5D9ebF96AA0Ed", account.address());
         assertEquals("hello PF-AAAA", account.bio());
+        assertEquals("holder", account.username());
         assertEquals(java.util.List.of("0x7db967bcf885c8ae4bbfdb5ffff5d9ebf96aa0ed", "7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2"),
                 account.wallets(), "blank entries dropped");
         assertEquals("/api/v2/accounts/" + ADDRESS + "?include=wallets", requestPath.get());
