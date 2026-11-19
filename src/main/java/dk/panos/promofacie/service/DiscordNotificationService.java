@@ -63,7 +63,10 @@ public class DiscordNotificationService {
 
         try {
             // Query notification settings for the given policyId
-            Notification notification = Notification.find("policyId", message.policyId()).firstResult();
+            // EVM addresses: the Robinhood indexer sends them lowercase; rows saved before normalization may be checksummed.
+            Notification notification = message.policyId().startsWith("0x")
+                    ? Notification.find("lower(policyId) = ?1", message.policyId().toLowerCase()).firstResult()
+                    : Notification.find("policyId", message.policyId()).firstResult();
             if (notification == null) {
                 log.info("[DiscordNotification] No notification configuration found in database for policyId: {}",
                         message.policyId());
@@ -123,8 +126,25 @@ public class DiscordNotificationService {
                 assetName = resolvePolicyName(message.policyId());
             }
 
-            String cardanoscanUrl = (message.txHash() != null && !message.txHash().isBlank())
-                    ? "https://cardanoscan.io/transaction/" + message.txHash()
+            String chain = message.chain() != null ? message.chain().toUpperCase() : "CARDANO";
+            String txExplorerBase;
+            String assetButtonLabel;
+            switch (chain) {
+                case "ROBINHOOD" -> {
+                    txExplorerBase = "https://robinhoodchain.blockscout.com/tx/";
+                    assetButtonLabel = "View on Blockscout";
+                }
+                case "SOLANA" -> {
+                    txExplorerBase = "https://solscan.io/tx/";
+                    assetButtonLabel = "View on Solscan";
+                }
+                default -> {
+                    txExplorerBase = "https://cardanoscan.io/transaction/";
+                    assetButtonLabel = "View on Pool.pm";
+                }
+            }
+            String txExplorerUrl = (message.txHash() != null && !message.txHash().isBlank())
+                    ? txExplorerBase + message.txHash()
                     : null;
 
             StringBuilder sb = new StringBuilder();
@@ -137,11 +157,11 @@ public class DiscordNotificationService {
 
             List<net.dv8tion.jda.api.interactions.components.buttons.Button> buttons = new ArrayList<>();
             if (message.url() != null && !message.url().isBlank()) {
-                buttons.add(net.dv8tion.jda.api.interactions.components.buttons.Button.link(message.url(), "View on Pool.pm")
+                buttons.add(net.dv8tion.jda.api.interactions.components.buttons.Button.link(message.url(), assetButtonLabel)
                         .withEmoji(net.dv8tion.jda.api.entities.emoji.Emoji.fromUnicode("👀")));
             }
-            if (cardanoscanUrl != null) {
-                buttons.add(net.dv8tion.jda.api.interactions.components.buttons.Button.link(cardanoscanUrl, "View Transaction")
+            if (txExplorerUrl != null) {
+                buttons.add(net.dv8tion.jda.api.interactions.components.buttons.Button.link(txExplorerUrl, "View Transaction")
                         .withEmoji(net.dv8tion.jda.api.entities.emoji.Emoji.fromUnicode("🔗")));
             }
 

@@ -24,5 +24,8 @@ public record TransactionMessage(
         @JsonProperty("bundledMultiPolicy")
         Boolean bundledMultiPolicy,
         @JsonProperty("platform")
-        String platform
+        String platform,
+        // CARDANO (null: yaci-discord-kafka-plugin does not send it), ROBINHOOD or SOLANA
+        @JsonProperty("chain")
+        String chain
 ) {}
