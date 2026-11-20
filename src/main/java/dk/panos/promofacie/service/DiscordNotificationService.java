@@ -113,6 +113,10 @@ public class DiscordNotificationService {
                 header = "**New Sell Swap Detected!** 🔄";
             } else if ("LISTING".equals(message.type())) {
                 header = "**New Listing Detected!** 🏷️";
+            } else if ("FT_BUY".equals(message.type())) {
+                header = "**New Token Buy!** 🟢";
+            } else if ("FT_SELL".equals(message.type())) {
+                header = "**New Token Sell!** 🔴";
             } else if ("OFFER".equals(message.type())) {
                 if ("ASSET_OFFER".equals(message.offerType())) {
                     header = "**New Item Offer!** 🤝";
@@ -152,6 +156,10 @@ public class DiscordNotificationService {
             sb.append("🎯 **Asset:** ").append(assetName != null ? assetName : "Unknown").append("\n");
             sb.append("🤓 **Quantity:** ").append(message.quantity() != null ? message.quantity() : "1").append("\n");
             sb.append("💰 **Price:** ").append(message.price() != null ? message.price() : "Unknown");
+            String dexLine = dexLine(message);
+            if (dexLine != null) {
+                sb.append("\n").append(dexLine);
+            }
 
             String formattedMessage = sb.toString().trim();
 
@@ -197,6 +205,20 @@ public class DiscordNotificationService {
         } catch (Exception e) {
             log.error("Failed to send Discord notification to channel: {}", channelId, e);
         }
+    }
+
+    /**
+     * The DEX line of a fungible-token trade (FT_BUY / FT_SELL), or null for any other type. The plugin
+     * sends no platform when it doesn't recognise the pool, so the community is asked to report it.
+     */
+    static String dexLine(TransactionMessage message) {
+        if (!"FT_BUY".equals(message.type()) && !"FT_SELL".equals(message.type())) {
+            return null;
+        }
+        if (message.platform() != null && !message.platform().isBlank()) {
+            return "🏦 **DEX:** " + message.platform();
+        }
+        return "🏦 **DEX:** Unknown pool. Contact PromoFacie to get it added.";
     }
 
     private String resolvePolicyName(String policyId) {
